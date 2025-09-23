@@ -1,111 +1,125 @@
 import numpy as np
-from find_tag import get_homographies, get_detections
 import cv2
+from find_tag import get_detections
 
-# cm per tag unit
-cm2tag = 8.7
+# --- camera intrinsics (make sure these are for the current frame size!) ---
+K = np.array([[919.76178, 0,     962.6875],
+              [0,        919.8909, 550.9944],
+              [0,        0,        1]], dtype=np.float64)
 
+Kinv = np.linalg.inv(K)
 
-intrinsics = np.array([[919.76178, 0, 962.6875],
-                       [0, 919.8909, 550.9944],
-                       [0,0,1]])
-    
-inverse = np.linalg.inv(intrinsics)
+# If you have distortion, put it here (example):
+distCoeffs = None  # e.g., np.array([k1, k2, p1, p2, k3], dtype=np.float64)
 
+# Your physical tag half-side in meters: 8.7 cm per tag unit (half-side) => 0.087 m
+half_side_m = 8.7 / 100.0  # meters per "tag unit" (tag family canonical: half-side = 1 unit)
 
-
-# checking here
-identity_check = np.matmul(intrinsics, inverse)
-print(identity_check)
-
-
-
-def get_full_T(homography): # input is numpy matrix
-    t = np.matmul(inverse, homography)
-    scale = np.linalg.norm(t[:3, 0])
-    t = t / scale
-    full_t = np.eye(4, dtype=np.float32)
-    r_3 = np.cross(t[:, 0], t[:, 1])
-    full_t[:3, 0] = t[:, 0]
-    full_t[:3, 1] = t[:, 1]
-    full_t[:3, 2] = r_3
-    full_t[:3, 3] = t[:, 2]
-    full_t *= (cm2tag/100.0)  # convert to meters
-    return full_t
-
-
-def reprojection_error(full_t, tag_size, corners_2d, K):
+def best_order(corners_proj, corners_det):
     """
-    full_t : (4,4) tag->camera transform (from your get_full_T)
-    tag_size: side length of the april tag in same unit as translation (meters)
-    corners_2d: (4,2) detected corners in pixel coords, ordered to match 3D corners
-    K : (3,3) intrinsics
-    returns: mean_error, errors_per_corner, projected_points (4,2)
+    corners_proj: (4,2) projected in pixels
+    corners_det : (4,2) detected in pixels (unknown order)
+    returns: det_reordered (4,2), best_idx_order (list of 4), best_err
     """
-    # define tag corners in tag frame (z=0). order: e.g. top-left, top-right, bottom-right, bottom-left
-    s = tag_size 
-    corners_3d = np.array([[-s, -s, 0.0],
-                           [ s, -s, 0.0],
-                           [ s,  s, 0.0],
-                           [-s,  s, 0.0]], dtype=np.float32)  # adjust order to match your detector
+    idx = [0,1,2,3]
+    rotations = [idx[i:]+idx[:i] for i in range(4)]
+    candidates = rotations + [list(reversed(r)) for r in rotations]
 
-    # Extract R and t from full_t (tag->camera)
-    R = full_t[:3, :3]
-    t = full_t[:3, 3].reshape(3, 1)
+    best = (1e18, candidates[0])
+    for order in candidates:
+        det_ord = corners_det[order]
+        err = np.mean(np.linalg.norm(corners_proj - det_ord, axis=1))
+        if err < best[0]:
+            best = (err, order)
+    return corners_det[best[1]], best[1], best[0]
 
-    # Project using K [R|t]
-    P = np.hstack((R, t))  # 3x4
-    corners_h = np.hstack((corners_3d, np.ones((4,1))))  # 4x4
-    proj = (K @ (P @ corners_h.T)).T  # 4x3
-    proj_pixels = (proj[:, :2].T / proj[:, 2]).T  # normalize
+def decompose_homography(H, K, Kinv):
+    """
+    Returns R (3x3) and t (3,) in *tag units*.
+    Assumes the planar model used to generate H has Z=0 and tag corners (±1, ±1).
+    """
+    A = Kinv @ H  # 3x3
 
-    # compute pixel errors
-    corners_2d = np.asarray(corners_2d, dtype=np.float32).reshape(-1, 2)
+    a1 = A[:, 0]
+    a2 = A[:, 1]
+    a3 = A[:, 2]
+
+    # common scale (use average of norms; robust under noise)
+    lam1 = 1.0 / np.linalg.norm(a1)
+    lam2 = 1.0 / np.linalg.norm(a2)
+    lam = 0.5 * (lam1 + lam2)
+
+    r1 = lam * a1
+    r2 = lam * a2
+    r3 = np.cross(r1, r2)
+
+    R = np.column_stack((r1, r2, r3))
+
+    # Orthonormalize via SVD and enforce det=+1
+    U, _, Vt = np.linalg.svd(R)
+    R = U @ Vt
+    if np.linalg.det(R) < 0:
+        R[:, 2] *= -1
+
+    t = lam * a3  # translation in "tag units"
+
+    return R.astype(np.float64), t.astype(np.float64)
+
+
+def reprojection_error_units(R, t, corners_2d, K):
+    """
+    R, t in TAG UNITS. Corners in TAG UNITS (±1).
+    """
+    # Canonical tag corners: half-side = 1 unit
+    corners_3d_units = np.array([[-1, -1, 0.0],
+                                 [ 1, -1, 0.0],
+                                 [ 1,  1, 0.0],
+                                 [-1,  1, 0.0]], dtype=np.float64)
+
+    P = np.hstack((R, t.reshape(3,1)))  # 3x4
+    corners_h = np.hstack((corners_3d_units, np.ones((4,1))))
+    proj = (K @ (P @ corners_h.T)).T  # (4,3)
+    proj_pixels = (proj[:, :2].T / proj[:, 2]).T
+
+    corners_2d = np.asarray(corners_2d, dtype=np.float64).reshape(-1, 2)
     errors = np.linalg.norm(proj_pixels - corners_2d, axis=1)
-    mean_err = errors.mean()
+    return errors.mean(), errors, proj_pixels
 
-    return mean_err, errors, proj_pixels
-
-
-def draw_validation(frame, proj_pixels, detected_corners, full_t, K):
-    # draw projected corners (green) and detected corners (red)
+def draw_validation(frame, proj_pixels, detected_corners, R, t_units, K, half_side_m):
+    # projected vs detected
     for p in proj_pixels:
-        cv2.circle(frame, tuple(p.astype(int)), 4, (0,255,0), -1)  # projected
+        cv2.circle(frame, tuple(p.astype(int)), 4, (0,255,0), -1)  # projected (green)
     for p in detected_corners:
-        cv2.circle(frame, tuple(np.array(p).astype(int)), 4, (0,0,255), 2)  # detected
+        cv2.circle(frame, tuple(np.array(p).astype(int)), 4, (0,0,255), 2)  # detected (red)
 
-    # draw lines connecting projected corners
-    cv2.polylines(frame, [proj_pixels.astype(int)], isClosed=True, color=(0,255,0), thickness=2)
-    cv2.polylines(frame, [np.asarray(detected_corners).astype(int)], isClosed=True, color=(0,0,255), thickness=1)
+    cv2.polylines(frame, [proj_pixels.astype(int)], True, (0,255,0), 2)
+    cv2.polylines(frame, [np.asarray(detected_corners).astype(int)], True, (0,0,255), 1)
 
-    # draw coordinate axes (length in same units as tag_size; choose visually)
-    R = full_t[:3,:3]
-    t = full_t[:3,3].reshape(3,1)
-    rvec, _ = cv2.Rodrigues(R)  # rotation vector for cv2
-    tvec = t.flatten()
+    # axes in TAG UNITS (so origin/axes lengths match the pose units)
+    axis_len_units = 0.5  # half a tag-half-side; tweak visually
+    axis_3d_units = np.array([[0, 0, 0],
+                              [axis_len_units, 0, 0],
+                              [0, axis_len_units, 0],
+                              [0, 0, axis_len_units]], dtype=np.float64)
 
-    axis_len = 0.25  # 5 cm, change to fit scene
-    axis_3d = np.array([
-        [0, 0, 0],
-        [axis_len, 0, 0],
-        [0, axis_len, 0],
-        [0, 0, axis_len]
-    ], dtype=np.float32)
+    # convert t to meters only for cv2.projectPoints if you also convert the axis to meters
+    t_m = t_units * half_side_m
+    axis_3d_m = axis_3d_units * half_side_m
 
-    imgpts, _ = cv2.projectPoints(axis_3d, rvec, tvec, K, distCoeffs=None)
+    rvec, _ = cv2.Rodrigues(R)
+    imgpts, _ = cv2.projectPoints(axis_3d_m, rvec, t_m, K, distCoeffs=None)
     imgpts = imgpts.reshape(-1,2).astype(int)
     origin = tuple(imgpts[0])
-    cv2.line(frame, origin, tuple(imgpts[1]), (255,0,0), 2) # X in blue
-    cv2.line(frame, origin, tuple(imgpts[2]), (0,255,0), 2) # Y in green
-    cv2.line(frame, origin, tuple(imgpts[3]), (0,0,255), 2) # Z in red
-
+    cv2.line(frame, origin, tuple(imgpts[1]), (255,0,0), 2)   # X (blue)
+    cv2.line(frame, origin, tuple(imgpts[2]), (0,255,0), 2)   # Y (green)
+    cv2.line(frame, origin, tuple(imgpts[3]), (0,0,255), 2)   # Z (red)
     return frame
 
 
 if __name__ == "__main__":
     cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-    homographies = None
-    full_t = None
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -113,13 +127,24 @@ if __name__ == "__main__":
         detections = get_detections(frame)
         if detections is not None:
             for det in detections:
-                corners = det.corners
-                print(corners)
-                h = det.homography
-                full_t = get_full_T(h)
-                err_mean, err_per_corner, proj_pixels = reprojection_error(full_t, cm2tag/100.0, corners, intrinsics)
+                corners_px = det.corners  # shape (4,2), order should be TL, TR, BR, BL (verify!)
+                H = det.homography.astype(np.float64)
+
+                R, t_units = decompose_homography(H, K, Kinv)
+
+                # Option A: pure tag units (corners at ±1)
+                err_mean, err_per_corner, proj_pixels = reprojection_error_units(R, t_units, corners_px, K)
+                corners_px = np.asarray(corners_px, np.float64).reshape(-1,2)
+                corners_px_best, order, tmp = best_order(proj_pixels, corners_px)
+
+                # Now compute the FINAL error with matched pairs
+                final_errs = np.linalg.norm(proj_pixels - corners_px_best, axis=1)
+                final_mean = final_errs.mean()
+                print(f"Tag {det.tag_id}: mean reproj error {final_mean:.2f} px; order={order}")
+
                 print(f"Tag {det.tag_id}: mean reproj error {err_mean:.2f} px")
-                frame = draw_validation(frame, proj_pixels, corners, full_t, intrinsics)
+
+                frame = draw_validation(frame, proj_pixels, corners_px, R, t_units, K, half_side_m)
         cv2.imshow("Detected AprilTags", frame)
         
         if cv2.waitKey(1) & 0xFF == ord('q'):
