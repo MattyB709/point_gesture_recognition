@@ -15,6 +15,7 @@ distCoeffs = None  # e.g., np.array([k1, k2, p1, p2, k3], dtype=np.float64)
 # Your physical tag half-side in meters: 8.7 cm per tag unit (half-side) => 0.087 m
 half_side_m = 8.7 / 100.0  # meters per "tag unit" (tag family canonical: half-side = 1 unit)
 
+# useful for if tag order is wrong, the correct order ended up being [3,2,1,0]. No longer necessary
 def best_order(corners_proj, corners_det):
     """
     corners_proj: (4,2) projected in pixels
@@ -65,16 +66,19 @@ def decompose_homography(H, K, Kinv):
 
     return R.astype(np.float64), t.astype(np.float64)
 
-
 def reprojection_error_units(R, t, corners_2d, K):
     """
     R, t in TAG UNITS. Corners in TAG UNITS (±1).
     """
     # Canonical tag corners: half-side = 1 unit
-    corners_3d_units = np.array([[-1, -1, 0.0],
-                                 [ 1, -1, 0.0],
-                                 [ 1,  1, 0.0],
-                                 [-1,  1, 0.0]], dtype=np.float64)
+    # corners_3d_units = np.array([[-1, -1, 0.0],
+    #                              [ 1, -1, 0.0],
+    #                              [ 1,  1, 0.0],
+    #                              [-1,  1, 0.0]], dtype=np.float64)
+    corners_3d_units = np.array([[-1, 1, 0.0],
+                                 [ 1, 1, 0.0],
+                                 [ 1,  -1, 0.0],
+                                 [-1,  -1, 0.0]], dtype=np.float64)
 
     P = np.hstack((R, t.reshape(3,1)))  # 3x4
     corners_h = np.hstack((corners_3d_units, np.ones((4,1))))
@@ -135,13 +139,8 @@ if __name__ == "__main__":
                 # Option A: pure tag units (corners at ±1)
                 err_mean, err_per_corner, proj_pixels = reprojection_error_units(R, t_units, corners_px, K)
                 corners_px = np.asarray(corners_px, np.float64).reshape(-1,2)
-                corners_px_best, order, tmp = best_order(proj_pixels, corners_px)
 
                 # Now compute the FINAL error with matched pairs
-                final_errs = np.linalg.norm(proj_pixels - corners_px_best, axis=1)
-                final_mean = final_errs.mean()
-                print(f"Tag {det.tag_id}: mean reproj error {final_mean:.2f} px; order={order}")
-
                 print(f"Tag {det.tag_id}: mean reproj error {err_mean:.2f} px")
 
                 frame = draw_validation(frame, proj_pixels, corners_px, R, t_units, K, half_side_m)
