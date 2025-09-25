@@ -9,11 +9,9 @@ K = np.array([[919.76178, 0,     962.6875],
 
 Kinv = np.linalg.inv(K)
 
-# If you have distortion, put it here (example):
-distCoeffs = None  # e.g., np.array([k1, k2, p1, p2, k3], dtype=np.float64)
 
 # Your physical tag half-side in meters: 8.7 cm per tag unit (half-side) => 0.087 m
-half_side_m = 8.7 / 100.0  # meters per "tag unit" (tag family canonical: half-side = 1 unit)
+half_side_m = 10 / 100.0  # meters per "tag unit" (tag family canonical: half-side = 1 unit)
 
 # useful for if tag order is wrong, the correct order ended up being [3,2,1,0]. No longer necessary
 def best_order(corners_proj, corners_det):
@@ -120,9 +118,14 @@ def draw_validation(frame, proj_pixels, detected_corners, R, t_units, K, half_si
     cv2.line(frame, origin, tuple(imgpts[3]), (0,0,255), 2)   # Z (red)
     return frame
 
+# given T_AB and T_CB, return T_AC, i.e. the rigid transformation from C to A's coordinates
+def compose_transforms_through_B(T_A_B, T_C_B):
+    T_B_C = np.linalg.inv(T_C_B)
+    return T_A_B @ T_B_C
 
 if __name__ == "__main__":
     cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+    cv2.namedWindow("Detected AprilTags", cv2.WINDOW_NORMAL)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
     while True:
@@ -130,23 +133,37 @@ if __name__ == "__main__":
         if not ret:
             break
         detections = get_detections(frame)
+        tag_t = []
         if detections is not None:
             for det in detections:
                 corners_px = det.corners  # shape (4,2), order should be TL, TR, BR, BL (verify!)
                 H = det.homography.astype(np.float64)
 
                 R, t_units = decompose_homography(H, K, Kinv)
+                homogenous = np.eye(4)
+                homogenous[:3,:3] = R
+                homogenous[:3, 3] = t_units
+                tag_t.append(homogenous.copy())
                 t_units *= half_side_m  # convert to meters
-                print(np.linalg.norm(t_units))
+                # print("DISTANCE TO TAG: ", np.linalg.norm(t_units))
+
 
                 # Option A: pure tag units (corners at ±1)
                 err_mean, err_per_corner, proj_pixels = reprojection_error_units(R, t_units, corners_px, K)
                 corners_px = np.asarray(corners_px, np.float64).reshape(-1,2)
 
                 # Now compute the FINAL error with matched pairs
-                print(f"Tag {det.tag_id}: mean reproj error {err_mean:.2f} px")
+                # print(f"Tag {det.tag_id}: mean reproj error {err_mean:.2f} px")
 
                 frame = draw_validation(frame, proj_pixels, corners_px, R, t_units, K, half_side_m)
+
+        if len(tag_t) == 2:
+            print("Relative pose between tags:")
+            T_0_w = tag_t[0]
+            T_1_w = tag_t[1]
+            T_w_0 = np.linalg.inv(T_0_w)
+            T_1_0 = T_w_0 @ T_1_w 
+            print(np.linalg.norm(T_1_0[:3,3]) * half_side_m, "units apart")
         cv2.imshow("Detected AprilTags", frame)
         
         if cv2.waitKey(1) & 0xFF == ord('q'):
