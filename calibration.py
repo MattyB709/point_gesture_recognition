@@ -25,6 +25,7 @@ while True:
     known_to_camera = None
 
     detections = get_detections(frame)
+    cv2.imshow("Detected AprilTags", frame)
     if detections is None:
         print("No tags detected")
         continue
@@ -58,7 +59,7 @@ while True:
         continue
 
     # Loop through the dict of tags needing world transform
-    for id, unknown_tag_to_camera in unknown_map:
+    for id, unknown_tag_to_camera in unknown_map.items():
         # Multiply tag -> camera transform by saved camera -> known tag transform, save as tag -> known tag
         camera_to_known = np.linalg.inv(known_to_camera[1])
         unkown_to_known = camera_to_known @ unknown_tag_to_camera
@@ -71,8 +72,9 @@ while True:
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
+cap.release()
 
-    cv2.imshow("Detected AprilTags", frame)
+
 
 
 serializable_data = {k: v.tolist() for k, v in transformation_map.items()}
