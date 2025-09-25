@@ -79,6 +79,7 @@ def reprojection_error_units(R, t, corners_2d, K):
                                  [ 1, 1, 0.0],
                                  [ 1,  -1, 0.0],
                                  [-1,  -1, 0.0]], dtype=np.float64)
+    corners_3d_units *= half_side_m
 
     P = np.hstack((R, t.reshape(3,1)))  # 3x4
     corners_h = np.hstack((corners_3d_units, np.ones((4,1))))
@@ -107,7 +108,7 @@ def draw_validation(frame, proj_pixels, detected_corners, R, t_units, K, half_si
                               [0, 0, axis_len_units]], dtype=np.float64)
 
     # convert t to meters only for cv2.projectPoints if you also convert the axis to meters
-    t_m = t_units * half_side_m
+    t_m = t_units 
     axis_3d_m = axis_3d_units * half_side_m
 
     rvec, _ = cv2.Rodrigues(R)
@@ -135,6 +136,8 @@ if __name__ == "__main__":
                 H = det.homography.astype(np.float64)
 
                 R, t_units = decompose_homography(H, K, Kinv)
+                t_units *= half_side_m  # convert to meters
+                print(np.linalg.norm(t_units))
 
                 # Option A: pure tag units (corners at ±1)
                 err_mean, err_per_corner, proj_pixels = reprojection_error_units(R, t_units, corners_px, K)
