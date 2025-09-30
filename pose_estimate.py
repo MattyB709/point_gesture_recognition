@@ -32,7 +32,7 @@ def best_order(corners_proj, corners_det):
             best = (err, order)
     return corners_det[best[1]], best[1], best[0]
 
-def decompose_homography(H, K, Kinv):
+def decompose_homography(H):
     """
     Returns R (3x3) and t (3,) in *tag units*.
     Assumes the planar model used to generate H has Z=0 and tag corners (±1, ±1).
@@ -62,7 +62,11 @@ def decompose_homography(H, K, Kinv):
 
     t = lam * a3  # translation in "tag units"
 
-    return R.astype(np.float64), t.astype(np.float64)
+    homogenous = np.eye(4)
+    homogenous[:3,:3] = R
+    homogenous[:3, 3] = t
+
+    return homogenous.astype(np.float64)
 
 def reprojection_error_units(R, t, corners_2d, K):
     """
@@ -139,10 +143,7 @@ if __name__ == "__main__":
                 corners_px = det.corners  # shape (4,2), order should be TL, TR, BR, BL (verify!)
                 H = det.homography.astype(np.float64)
 
-                R, t_units = decompose_homography(H, K, Kinv)
-                homogenous = np.eye(4)
-                homogenous[:3,:3] = R
-                homogenous[:3, 3] = t_units
+                homogenous = decompose_homography(H, K, Kinv)
                 tag_t.append(homogenous.copy())
                 t_units *= half_side_m  # convert to meters
                 # print("DISTANCE TO TAG: ", np.linalg.norm(t_units))
