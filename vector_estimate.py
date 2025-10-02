@@ -33,7 +33,7 @@ with open("transformation_map.json", "r") as f:
 
 # Convert lists back to numpy arrays
 transformation_map = {int(k): np.array(v) for k, v in loaded.items()}
-
+pointed_to_id = 19
 if __name__ == "__main__":
     mp_pose = mp.solutions.pose
     pose = mp_pose.Pose()
@@ -51,6 +51,7 @@ if __name__ == "__main__":
         detections = get_detections(rgb)
         
         if detections is None:
+            cv2.imshow("Image", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
             continue
 
         corners = detections[0].corners
@@ -60,6 +61,11 @@ if __name__ == "__main__":
 
         # Draw the corners (a polygon) using polylines
         rgb = cv2.polylines(rgb, [corners], isClosed=True, color=(0, 255, 0), thickness=2)
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('q'):
+            break
+        elif key == ord(' '):
+            pointed_to_id = int(input())
 
         if result.pose_landmarks:
             landmarks = result.pose_landmarks.landmark
@@ -77,9 +83,11 @@ if __name__ == "__main__":
                 id = detections[0].tag_id
                 if id not in transformation_map:
                     print(f"tag {id} not found in transformation map")
+                    # pointed_to_id = -1
                     continue
                 if pointed_to_id not in transformation_map:
                     print(f"pointed to tag {pointed_to_id} not in transformation map")
+                    # pointed_to_id = -1
                     continue
                 H = detections[0].homography.astype(np.float64)
 
@@ -91,6 +99,7 @@ if __name__ == "__main__":
 
                 # get tag->world for pointed to tag from transformation_map and invert it to get world->tag
                 pointed_to_tag_to_world = transformation_map[pointed_to_id]
+                # pointed_to_id = -1
                 pointed_to_tag_to_camera = world_to_camera @ pointed_to_tag_to_world
 
                 # extract tag coordinates from T of tag->camera
@@ -109,24 +118,31 @@ if __name__ == "__main__":
                     zm = zmm / 1000
 
                     # calculate vector between tag coordinates and wrist coordinates
-                    v = np.array([t_pointed_to_tag_to_camera[0] - xm, t_pointed_to_tag_to_camera[1] - ym, t_pointed_to_tag_to_camera[2] - zm])
+                    v = np.array([t_pointed_to_tag_to_camera[0] * 1000 - xmm, t_pointed_to_tag_to_camera[1] * 1000 - ymm, t_pointed_to_tag_to_camera[2] * 1000 - zmm])
+                    print(np.linalg.norm(v))
                     v = v / np.linalg.norm(v)
 
                     # calculate 3D point along vector ray from wrist coordinates
-                    point_on_ray = np.array([xm, ym, zm]) + (200.0 * v)
+                    point_on_ray = np.array([xmm, ymm, zmm]) + (2000.0 * v)
+                    try:
+                        uv = calib.convert_3d_to_2d(t_pointed_to_tag_to_camera, CalibrationType.COLOR, CalibrationType.COLOR)
+                    except Exception:
+                        pass
+
 
                     # project wrist and calculated point back to 2D
-                    uv = calib.convert_3d_to_2d(point_on_ray, CalibrationType.COLOR, CalibrationType.COLOR)
                     camera_coords_calculated = tuple(map(int, uv))
 
-                    # draw vector on 2D image connecting wrist and calculated point
-                    rgb = cv2.line(rgb, (x, y), camera_coords_calculated, (0, 255, 0), 2)
-                    cv2.imwrite("calculated_vector.jpg", rgb)
-            
-            cv2.imshow("Image", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+                    uv = calib.convert_3d_to_2d((xmm, ymm, zmm), CalibrationType.COLOR, CalibrationType.COLOR)
+                    camera_coords_wrist = tuple(map(int, uv))
+                    # print(x,y)
+                    # print(camera_coords_wrist)
+                    # print(camera_coords_calculated)
 
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
+                    # draw vector on 2D image connecting wrist and calculated point
+                    cv2.line(rgb, camera_coords_wrist, camera_coords_calculated, (0, 255, 0), 2)
+        cv2.imshow("Image", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+            
 
 
   

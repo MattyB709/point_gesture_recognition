@@ -86,8 +86,9 @@ if __name__ == "__main__":
         # time.sleep(1)
         
       # draw simple landmarks
-        # annotated_image = mp.solutions.drawing_utils.draw_landmarks(rgb, result.pose_landmarks, mp_pose.POSE_CONNECTIONS)
-      cv2.imshow("Image", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+          annotated_image = mp.solutions.drawing_utils.draw_landmarks(rgb, result.pose_landmarks, mp_pose.POSE_CONNECTIONS)
+      # cv2.imshow("Image", cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR))
+      cv2.imshow("Image", rgb)
 
       if cv2.waitKey(1) & 0xFF == ord('q'):
           break
