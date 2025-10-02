@@ -17,7 +17,6 @@ while (True):
 
     calib = k4a.calibration                    # pyk4a Calibration object (intrinsics+extrinsics)
     depth_in_color = cap.transformed_depth
-    print(np.array(depth_in_color).shape)
     point_x = 640
     point_y = 960
     # returns a (1080,1920) uint16 array (mm) aligned to the color image
