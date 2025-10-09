@@ -33,7 +33,8 @@ with open("transformation_map.json", "r") as f:
 
 # Convert lists back to numpy arrays
 transformation_map = {int(k): np.array(v) for k, v in loaded.items()}
-pointed_to_id = 19
+print("input a tag to point at: ")
+pointed_to_id = int(input())
 if __name__ == "__main__":
     mp_pose = mp.solutions.pose
     pose = mp_pose.Pose()
@@ -123,24 +124,24 @@ if __name__ == "__main__":
                     v = v / np.linalg.norm(v)
 
                     # calculate 3D point along vector ray from wrist coordinates
-                    point_on_ray = np.array([xmm, ymm, zmm]) + (2000.0 * v)
+                    point_on_ray = np.array([xmm, ymm, zmm]) + (1500.0 * v)
                     try:
-                        uv = calib.convert_3d_to_2d(t_pointed_to_tag_to_camera, CalibrationType.COLOR, CalibrationType.COLOR)
+                        uv = calib.convert_3d_to_2d(point_on_ray, CalibrationType.COLOR, CalibrationType.COLOR)
+                        camera_coords_calculated = tuple(map(int, uv))
+
+                        uv = calib.convert_3d_to_2d((xmm, ymm, zmm), CalibrationType.COLOR, CalibrationType.COLOR)
+                        camera_coords_wrist = tuple(map(int, uv))
+                        cv2.line(rgb, camera_coords_wrist, camera_coords_calculated, (0, 255, 0), 2)
                     except Exception:
                         pass
 
 
                     # project wrist and calculated point back to 2D
-                    camera_coords_calculated = tuple(map(int, uv))
-
-                    uv = calib.convert_3d_to_2d((xmm, ymm, zmm), CalibrationType.COLOR, CalibrationType.COLOR)
-                    camera_coords_wrist = tuple(map(int, uv))
                     # print(x,y)
                     # print(camera_coords_wrist)
                     # print(camera_coords_calculated)
 
                     # draw vector on 2D image connecting wrist and calculated point
-                    cv2.line(rgb, camera_coords_wrist, camera_coords_calculated, (0, 255, 0), 2)
         cv2.imshow("Image", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
             
 
