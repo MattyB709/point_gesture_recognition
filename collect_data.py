@@ -1,16 +1,51 @@
-import cv2
-from mediapipe import solutions
-from mediapipe.framework.formats import landmark_pb2
-import mediapipe as mp
-from mediapipe.tasks import python
-from mediapipe.tasks.python import vision
+import os
+from datetime import datetime
 import numpy as np
-from pyk4a import PyK4A, Config, ColorResolution, DepthMode, FPS
-from pyk4a import CalibrationType
-import time
+import cv2
 from find_tag import get_detections
 from pose_estimate import decompose_homography
 import json
+from pyk4a import PyK4A, Config, ColorResolution, DepthMode, FPS
+from pyk4a import CalibrationType
+import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
+
+OUTPUT_DIR = "data"   # <-- set this
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+def _stamp():
+    # month-day-time => 05-11-142530
+    return datetime.now().strftime("%m-%d-%H%M%S")
+
+def _save_sample(bgr_img, depth_in_color, label, start_dir_cam=None):
+    """
+    bgr_img: uint8 BGR image (1920x1080x3)
+    depth_in_color: uint16 (1080x1920; you pass transformed_depth)
+    label: 0 or 1
+    start_dir_cam: tuple(start_xyz_m, normalized_dir) in camera frame, each np.array shape (3,), meters
+    """
+    base = os.path.join(OUTPUT_DIR, _stamp())
+    img_path  = base + ".jpg"
+    depth_path = base + ".npy"
+    txt_path  = base + ".txt"
+
+    # 1) image
+    cv2.imwrite(img_path, bgr_img)
+
+    # 2) depth (raw array)
+    np.save(depth_path, depth_in_color)
+
+    # 3) label file
+    with open(txt_path, "w") as f:
+        f.write(f"{int(label)}\n")
+        if label == 1 and start_dir_cam is not None:
+            start_tag, end_tag = start_dir_cam
+            # EXACTLY 7 lines total: 1 + 6 numbers (each on its own line)
+            nums = start_tag + list(end_tag.astype(float))
+            for v in nums:
+                f.write(f"{v:.6f}\n")
+    print(f"[saved] {img_path}, {depth_path}, {txt_path}")
 
 PATH = 'pose_landmarker.task'
 
@@ -53,20 +88,18 @@ if __name__ == "__main__":
         
         if detections is None:
             cv2.imshow("Image", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+            cv2.waitKey(1)
             continue
 
-        corners = detections[0].corners
+        for det in detections:
+            corners = det.corners
 
-        # Convert the corners to integer
-        corners = corners.astype(int)
+            # Convert the corners to integer
+            corners = corners.astype(int)
 
-        # Draw the corners (a polygon) using polylines
-        rgb = cv2.polylines(rgb, [corners], isClosed=True, color=(0, 255, 0), thickness=2)
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):
-            break
-        elif key == ord(' '):
-            pointed_to_id = int(input())
+            # Draw the corners (a polygon) using polylines
+            rgb = cv2.polylines(rgb, [corners], isClosed=True, color=(0, 255, 0), thickness=2)
+
 
         if result.pose_landmarks:
             landmarks = result.pose_landmarks.landmark
@@ -120,11 +153,15 @@ if __name__ == "__main__":
 
                     # calculate vector between tag coordinates and wrist coordinates
                     v = np.array([t_pointed_to_tag_to_camera[0] - xm, t_pointed_to_tag_to_camera[1] - ym, t_pointed_to_tag_to_camera[2] - zm])
-                    print(np.linalg.norm(v))
-                    v = v / np.linalg.norm(v)
+                    norm = np.linalg.norm(v)
+                    if norm > 1e-8:
+                        v /= norm
+                    else: 
+                        print("issue with vector norm") 
+                        continue
 
                     # calculate 3D point along vector ray from wrist coordinates
-                    point_on_ray = np.array([xmm, ymm, zmm]) + (1500.0 * v)
+                    point_on_ray = np.array([xm, ym, zm]) + (1.5* v)
                     try:
                         uv = calib.convert_3d_to_2d(point_on_ray, CalibrationType.COLOR, CalibrationType.COLOR)
                         camera_coords_calculated = tuple(map(int, uv))
@@ -135,15 +172,39 @@ if __name__ == "__main__":
                     except Exception:
                         pass
 
-
-                    # project wrist and calculated point back to 2D
-                    # print(x,y)
-                    # print(camera_coords_wrist)
-                    # print(camera_coords_calculated)
+                    
 
                     # draw vector on 2D image connecting wrist and calculated point
         cv2.imshow("Image", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
-            
-
-
-  
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('q'):
+            break
+        elif key == ord('c'):
+            try:
+                pointed_to_id = int(input("Enter tag id to point at: "))
+            except Exception:
+                print("Invalid tag id")
+            continue
+        elif key == ord('y'):
+            # Save positive sample (requires valid wrist + vector this frame)
+            bgr_to_save = cv2.cvtColor(color, cv2.COLOR_BGRA2BGR)
+            try:
+                _save_sample(
+                    bgr_to_save,
+                    depth_in_color,
+                    label=1,
+                    start_dir_cam=(([xm,ym,zm],v))  # computed below
+                )
+            except NameError:
+                print("Cannot save positive: no valid wrist/vector computed this frame.")
+            continue
+        elif key == ord('n'):
+            # Save negative sample (image + depth + label 0)
+            bgr_to_save = cv2.cvtColor(color, cv2.COLOR_BGRA2BGR)
+            _save_sample(
+                bgr_to_save,
+                depth_in_color,
+                label=0,
+                start_dir_cam=None
+            )
+            continue
