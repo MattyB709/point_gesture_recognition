@@ -129,6 +129,12 @@ if __name__ == "__main__":
     
     if len(dataset) > 0:
         # Get first sample
+        print(f"First sample files:")
+        print(f"  Image: {dataset.samples[0]['image_path']}")
+        print(f"  Depth: {dataset.samples[0]['depth_path']}")
+        print(f"  Label: {dataset.samples[0]['label_path']}")
+        print()
+        
         rgbd_image, label = dataset[0]
         
         print(f"RGB-D Image shape: {rgbd_image.shape}")
