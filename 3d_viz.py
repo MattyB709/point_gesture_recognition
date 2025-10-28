@@ -208,8 +208,10 @@ def on_draw():
         draw_posed_thing(tag_pose, draw_quad, size=0.2, color=(0.8, 0.8, 0.8))
 
     # Live camera pose / wrist / vector
+ 
+    draw_posed_thing(latest_camera_pose, draw_axes, size=0.12)
     if is_data_valid:
-        draw_posed_thing(latest_camera_pose, draw_axes, size=0.12)
+        # draw_posed_thing(latest_camera_pose, draw_axes, size=0.12)
         if latest_wrist_world is not None and latest_vector_world is not None:
             draw_vector(latest_wrist_world, latest_vector_world, length=1.5, color=(1, 1, 0))
             wrist_pose = np.identity(4, dtype=np.float32)
@@ -281,8 +283,8 @@ k4a = PyK4A(K4AConfig(
     camera_fps=FPS.FPS_15
 ))
 k4a.start()
-
-pointed_to_id = 19  # change as needed
+print("Input a tag: ")
+pointed_to_id = int(input())  # change as needed
 
 def update(dt):
     global is_data_valid, latest_camera_pose, latest_wrist_world, latest_vector_world
@@ -301,7 +303,7 @@ def update(dt):
     tag_detections = get_detections(rgb)
 
     is_data_valid = False
-    if not tag_detections or pose_result is None or pose_result.pose_landmarks is None:
+    if not tag_detections:
         _preview(rgb)
         return
 
@@ -316,8 +318,12 @@ def update(dt):
     T_cam_from_ref_tag = np.asarray(decompose_homography(H), dtype=np.float32)  # 4x4
     T_cam_from_ref_tag[:3,3] *= half_side_m
     T_world_from_cam = (T_world_from_ref_tag @ np.linalg.inv(T_cam_from_ref_tag)).astype(np.float32)
+    latest_camera_pose = T_world_from_cam
 
     # Wrist pixel
+    if pose_result is None or pose_result.pose_landmarks is None:
+        _preview(rgb)
+        return
     landmarks = pose_result.pose_landmarks.landmark
     left_wrist = landmarks[mp_pose.PoseLandmark.LEFT_WRIST]
     h, w, _ = rgb.shape
@@ -348,7 +354,6 @@ def update(dt):
     wrist_world = (T_world_from_cam @ np.append(wrist_pos_cam, 1.0).astype(np.float32))[:3]
     dir_world = (T_world_from_cam[:3, :3] @ vec_cam).astype(np.float32)
 
-    latest_camera_pose = T_world_from_cam
     latest_wrist_world = wrist_world
     latest_vector_world = dir_world
     is_data_valid = True

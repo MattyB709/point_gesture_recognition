@@ -12,6 +12,10 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
 OUTPUT_DIR = "data"   # <-- set this
+DETECTION_RADIUS = 15 # find the min depth in a 10x10 pixel square
+Y_MAX = 1080
+X_MAX = 1920
+
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def _stamp():
@@ -52,7 +56,6 @@ PATH = 'pose_landmarker.task'
 # mediapipe object
 base_options = python.BaseOptions(model_asset_path=PATH)
 options = vision.PoseLandmarkerOptions(base_options=base_options, output_segmentation_masks=False)
-detector = vision.PoseLandmarker.create_from_options(options)
 cfg = Config(
     color_resolution=ColorResolution.RES_1080P,       # 1920x1080
     depth_mode=DepthMode.NFOV_UNBINNED,               # 640x576 depth
@@ -140,9 +143,17 @@ if __name__ == "__main__":
                 t_pointed_to_tag_to_camera = pointed_to_tag_to_camera[:3, 3].copy()
                 t_pointed_to_tag_to_camera *= half_side_m
 
-                if x < 1920 and x > 0 and y < 1080 and y > 0:
+                if x < X_MAX and x > 0 and y < Y_MAX and y > 0:
+                    # y0 = max(y-DETECTION_RADIUS, 0)
+                    # y1 = min(y+DETECTION_RADIUS, Y_MAX)
+                    # x0 = max(x-DETECTION_RADIUS, 0)
+                    # x1 = min(x+DETECTION_RADIUS, X_MAX)
+                    # sub_array = depth_in_color[y0:y1, x0:x1]
+                    # depth_point = np.min(sub_array)
+                    # index = np.argmin(sub_array, keepdims=True)
+                    # dy,dx = np.unravel_index(index, sub_array.shape)
+                    # x,y = x0+dx, y0+dy
                     depth_point = depth_in_color[y,x]
-
                     if depth_point == 0:
                         continue
                     xmm, ymm, zmm = calib.convert_2d_to_3d((x, y), depth_point, 
@@ -161,7 +172,7 @@ if __name__ == "__main__":
                         continue
 
                     # calculate 3D point along vector ray from wrist coordinates
-                    point_on_ray = np.array([xm, ym, zm]) + (1.5* v)
+                    point_on_ray = np.array([xmm, ymm, zmm]) + (300* v)
                     try:
                         uv = calib.convert_3d_to_2d(point_on_ray, CalibrationType.COLOR, CalibrationType.COLOR)
                         camera_coords_calculated = tuple(map(int, uv))

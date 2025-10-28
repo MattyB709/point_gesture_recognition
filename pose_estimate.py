@@ -6,6 +6,9 @@ from find_tag import get_detections
 K = np.array([[919.76178, 0,     962.6875],
               [0,        919.8909, 550.9944],
               [0,        0,        1]], dtype=np.float64)
+K = np.array([[921.89367676,   0,            957.98602295],
+              [0,              921.56634521, 546.57141113],
+              [0,              0,            1.        ]], dtype=np.float64)
 
 Kinv = np.linalg.inv(K)
 
