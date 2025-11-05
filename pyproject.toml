@@ -1,0 +1,10 @@
+[project]
+name = "point-gesture-recognition"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "certifi>=2025.10.5",
+    "torchvision>=0.24.0",
+]

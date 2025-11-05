@@ -1,4 +1,5 @@
 from pyk4a import PyK4A, Config, ColorResolution, DepthMode, CalibrationType
+# simple script to get camera intrinsics for azure kinect
 
 k4a = PyK4A(Config(
     color_resolution=ColorResolution.RES_1080P,
