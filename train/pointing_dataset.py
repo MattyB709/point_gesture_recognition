@@ -5,6 +5,7 @@ import torch
 from torch.utils.data import Dataset
 from PIL import Image
 from typing import Tuple, Optional
+import einops
 
 
 class PointingDataset(Dataset):
@@ -19,7 +20,7 @@ class PointingDataset(Dataset):
         - Lines 2-7 (if label==1): 6 floats (wrist_x, wrist_y, wrist_z, dir_x, dir_y, dir_z)
     """
     
-    def __init__(self, data_dir: str, transform: Optional[callable] = None):
+    def __init__(self, data_dir: str, transform: Optional[callable] = None, use_depth: bool = True):
         """
         Args:
             data_dir: Path to directory containing .jpg, .npy, and .txt files
@@ -27,6 +28,7 @@ class PointingDataset(Dataset):
         """
         self.data_dir = data_dir
         self.transform = transform
+        self.use_depth = use_depth
         
         # find all .jpg files (each represents a complete sample)
         self.samples = []
@@ -63,32 +65,35 @@ class PointingDataset(Dataset):
         bgr_img = cv2.imread(sample['image_path'])
         rgb_img = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2RGB)
         rgb_img = rgb_img.astype(np.float32) / 255.0  # Normalize to [0, 1]
-        rgb_img = np.transpose(rgb_img, (2, 0, 1))  # (H, W, C) -> (C, H, W)
-        
+        rgb_img = einops.rearrange(rgb_img, 'h w c -> c h w')  # (H, W, 3) -> (3, H, W)
         # Load depth image
-        depth_img = np.load(sample['depth_path'])
-        depth_img = depth_img.astype(np.float32) / 1000.0  # Convert mm to meters
-        depth_img = np.clip(depth_img, 0, 10.0)  # Clip to 0-10m range
-        depth_img = np.expand_dims(depth_img, axis=0)  # Add channel dimension (1, H, W)
+        if self.use_depth:
+            depth_img = np.load(sample['depth_path'])
+            depth_img = depth_img.astype(np.float32) / 1000.0  # Convert mm to meters
+            depth_img = np.clip(depth_img, 0, 10.0)  # Clip to 0-10m range
+            depth_img = np.expand_dims(depth_img, axis=0)  # Add channel dimension (1, H, W)
         
-        # Concatenate RGB + D to get 4D image
-        rgbd_image = np.concatenate([rgb_img, depth_img], axis=0)  # (4, H, W)
+            # Concatenate RGB + D to get 4D image
+            final_img = np.concatenate([rgb_img, depth_img], axis=0)  # (4, H, W)
         
         # Apply transform if provided
-        if self.transform:
-            rgbd_image = self.transform(rgbd_image)
-        
+            if self.transform:
+                rgbd_image = self.transform(rgbd_image)
+        else:
+            if self.transform: rgb_img = self.transform(rgb_img)
+            final_img = rgb_img  # Only RGB
+
         # Load labels
         label_dict = self._load_label(sample['label_path'])
         
         # Convert to torch tensors
-        rgbd_image = torch.from_numpy(rgbd_image).float()
+        final_img = torch.from_numpy(final_img).float()
         if label_dict['wrist_coords'] is not None:
             label_dict['wrist_coords'] = torch.from_numpy(label_dict['wrist_coords']).float()
         if label_dict['pointing_vector'] is not None:
             label_dict['pointing_vector'] = torch.from_numpy(label_dict['pointing_vector']).float()
-        
-        return rgbd_image, label_dict
+
+        return final_img, label_dict
     
     def _load_label(self, label_path: str) -> dict:
         """Load label from .txt file"""
@@ -101,7 +106,7 @@ class PointingDataset(Dataset):
             'is_pointing': label
         }
         
-        if label == 1 and len(lines) >= 7:
+        if label == 1 and len(lines) == 7:
             # Parse wrist coordinates and pointing vector
             wrist_coords = np.array([
                 float(lines[1].strip()),
@@ -116,48 +121,7 @@ class PointingDataset(Dataset):
             result['wrist_coords'] = wrist_coords
             result['pointing_vector'] = pointing_vector
         else:
-            result['wrist_coords'] = None
-            result['pointing_vector'] = None
-        
+            result['wrist_coords'] = np.array([0.0, 0.0, 0.0])
+            result['pointing_vector'] = np.array([0.0, 0.0, 0.0])
+
         return result
-
-
-# Example usage
-if __name__ == "__main__":
-    # Create dataset
-    dataset = PointingDataset(data_dir="data")
-    
-    if len(dataset) > 0:
-        # Get first sample
-        print(f"First sample files:")
-        print(f"  Image: {dataset.samples[0]['image_path']}")
-        print(f"  Depth: {dataset.samples[0]['depth_path']}")
-        print(f"  Label: {dataset.samples[0]['label_path']}")
-        print()
-        
-        rgbd_image, label = dataset[0]
-        
-        print(f"RGB-D Image shape: {rgbd_image.shape}")
-        print(f"Label: {label}")
-        print(f"Is pointing: {label['is_pointing']}")
-        
-        if label['is_pointing'] == 1:
-            print(f"Wrist coords: {label['wrist_coords']}")
-            print(f"Pointing vector: {label['pointing_vector']}")
-        
-        print("\n" + "="*50)
-        print("Dataset loaded successfully!")
-        print("="*50)
-        
-        # Test with DataLoader - skip the labels batching for now
-        from torch.utils.data import DataLoader
-        dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
-        
-        # Just get the first batch to verify images work
-        images, labels = next(iter(dataloader))
-        print(f"\nBatch of {len(labels)} images:")
-        print(f"  Images shape: {images.shape}")  # Should be (batch_size, 4, 1080, 1920)
-        print(f"  Successfully loaded {len(labels)} samples")
-        
-    else:
-        print("No data found. Run collect_data.py to collect samples.")
