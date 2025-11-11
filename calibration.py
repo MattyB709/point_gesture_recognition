@@ -4,7 +4,7 @@ from find_tag import get_detections
 from pose_estimate import decompose_homography
 import json
 
-cap = cv2.VideoCapture(1, cv2.CAP_DSHOW)
+cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
 cv2.namedWindow("Detected AprilTags", cv2.WINDOW_NORMAL)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
