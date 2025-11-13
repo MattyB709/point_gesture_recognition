@@ -7,6 +7,7 @@ from typing import Tuple, Optional
 import shutil
 import random
 from pathlib import Path
+import einops
 
 class PointingDataset(Dataset):
     """
@@ -20,7 +21,7 @@ class PointingDataset(Dataset):
         - Lines 2-7 (if label==1): 6 floats (wrist_x, wrist_y, wrist_z, dir_x, dir_y, dir_z)
     """
     
-    def __init__(self, data_dir: str, transform: Optional[callable] = None):
+    def __init__(self, data_dir: str, transform: Optional[callable] = None, use_depth: bool = False):
         """
         Args:
             data_dir: Path to directory containing .jpg, .npy, and .txt files
@@ -28,6 +29,7 @@ class PointingDataset(Dataset):
         """
         self.data_dir = data_dir
         self.transform = transform
+        self.use_depth = use_depth
         
         # find all .jpg files (each represents a complete sample)
         self.samples = []
@@ -64,33 +66,36 @@ class PointingDataset(Dataset):
         bgr_img = cv2.imread(sample['image_path'])
         rgb_img = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2RGB)
         rgb_img = rgb_img.astype(np.float32) / 255.0  # Normalize to [0, 1]
-        rgb_img = np.transpose(rgb_img, (2, 0, 1))  # (H, W, C) -> (C, H, W)
+        rgb_img = einops.rearrange(rgb_img, 'h w c -> c h w')  # (3, H, W)
         
         # Load depth image
-        depth_img = np.load(sample['depth_path'])
-        depth_img = depth_img.astype(np.float32) / 1000.0  # Convert mm to meters
-        depth_img = np.clip(depth_img, 0, 10.0)  # Clip to 0-10m range
-        depth_img = np.expand_dims(depth_img, axis=0)  # Add channel dimension (1, H, W)
-        
-        # Concatenate RGB + D to get 4D image
-        rgbd_image = np.concatenate([rgb_img, depth_img], axis=0)  # (4, H, W)
+        if self.use_depth:
+            depth_img = np.load(sample['depth_path'])
+            depth_img = depth_img.astype(np.float32) / 1000.0  # Convert mm to meters
+            depth_img = np.clip(depth_img, 0, 10.0)  # Clip to 0-10m range
+            depth_img = np.expand_dims(depth_img, axis=0)  # Add channel dimension (1, H, W)
+            
+            # Concatenate RGB + D to get 4D image
+            fin_img = np.concatenate([rgb_img, depth_img], axis=0)  # (4, H, W)
+        else:
+            fin_img = rgb_img  # (3, H, W)
         
         # Apply transform if provided
         if self.transform:
-            rgbd_image = self.transform(rgbd_image)
-        
+            fin_img = self.transform(fin_img)
+
         # Load labels
         label_dict = self._load_label(sample['label_path'])
         
         # Convert to torch tensors
-        rgbd_image = torch.from_numpy(rgbd_image).float()
+        fin_img = torch.from_numpy(fin_img).float()
         if label_dict['wrist_coords'] is not None:
             label_dict['wrist_coords'] = torch.from_numpy(label_dict['wrist_coords']).float()
         if label_dict['pointing_vector'] is not None:
             label_dict['pointing_vector'] = torch.from_numpy(label_dict['pointing_vector']).float()
-        
-        return rgbd_image, label_dict
-    
+
+        return fin_img, label_dict
+
     def _load_label(self, label_path: str) -> dict:
         """Load label from .txt file"""
         with open(label_path, 'r') as f:
@@ -117,14 +122,14 @@ class PointingDataset(Dataset):
             result['wrist_coords'] = wrist_coords
             result['pointing_vector'] = pointing_vector
         else:
-            result['wrist_coords'] = None
-            result['pointing_vector'] = None
-        
+            result['wrist_coords'] = np.array([0.0, 0.0, 0.0])
+            result['pointing_vector'] = np.array([0.0, 0.0, 0.0])
+
         return result
 
 def split_pointing_data(data_dir, output_dir, train_ratio=0.7,
                        val_ratio=0.15, test_ratio=0.15,
-                       stratify=True, seed=42):
+                       stratify=True, seed=42, use_test=False):
     """Split your data into train/val/test"""
 
     # Find samples
@@ -153,10 +158,15 @@ def split_pointing_data(data_dir, output_dir, train_ratio=0.7,
         random.shuffle(not_pointing)
 
         def split(lst):
-            n = len(lst)
-            t = int(n * train_ratio)
-            v = t + int(n * val_ratio)
-            return lst[:t], lst[t:v], lst[v:]
+            if use_test:
+                n = len(lst)
+                t = int(n * train_ratio)
+                v = t + int(n * val_ratio)
+                return lst[:t], lst[t:v], lst[v:]
+            else:
+                n = len(lst)
+                t = int(n * train_ratio)
+                return lst[:t], lst[t:], []
 
         p_t, p_v, p_te = split(pointing)
         np_t, np_v, np_te = split(not_pointing)
@@ -189,4 +199,4 @@ def split_pointing_data(data_dir, output_dir, train_ratio=0.7,
 # Example usage
 if __name__ == "__main__":
     # Create dataset
-    split_pointing_data("data", "split_data", )
+    split_pointing_data("data", "split_data", train_ratio=0.8, val_ratio=0.2)
