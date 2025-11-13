@@ -20,14 +20,16 @@ class PointingDataset(Dataset):
         - Lines 2-7 (if label==1): 6 floats (wrist_x, wrist_y, wrist_z, dir_x, dir_y, dir_z)
     """
     
-    def __init__(self, data_dir: str, transform: Optional[callable] = None):
+    def __init__(self, data_dir: str, transform: Optional[callable] = None, depth: bool = False):
         """
         Args:
             data_dir: Path to directory containing .jpg, .npy, and .txt files
             transform: Optional transform to apply to the image
+            depth: Whether to include depth information
         """
         self.data_dir = data_dir
         self.transform = transform
+        self.depth = depth
         
         # find all .jpg files (each represents a complete sample)
         self.samples = []
@@ -73,23 +75,25 @@ class PointingDataset(Dataset):
         depth_img = np.expand_dims(depth_img, axis=0)  # Add channel dimension (1, H, W)
         
         # Concatenate RGB + D to get 4D image
-        rgbd_image = np.concatenate([rgb_img, depth_img], axis=0)  # (4, H, W)
-        
+        final_img = rgb_img
+        if self.depth:
+            final_img = np.concatenate([rgb_img, depth_img], axis=0)  # (4, H, W)
+
         # Apply transform if provided
         if self.transform:
-            rgbd_image = self.transform(rgbd_image)
+            final_img = self.transform(final_img)
         
         # Load labels
         label_dict = self._load_label(sample['label_path'])
         
         # Convert to torch tensors
-        rgbd_image = torch.from_numpy(rgbd_image).float()
+        final_img = torch.from_numpy(final_img).float()
         if label_dict['wrist_coords'] is not None:
             label_dict['wrist_coords'] = torch.from_numpy(label_dict['wrist_coords']).float()
         if label_dict['pointing_vector'] is not None:
             label_dict['pointing_vector'] = torch.from_numpy(label_dict['pointing_vector']).float()
         
-        return rgbd_image, label_dict
+        return final_img, label_dict
     
     def _load_label(self, label_path: str) -> dict:
         """Load label from .txt file"""
