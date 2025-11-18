@@ -77,12 +77,12 @@ def validate(model, dataloader, criterion, device):
     total = 0
 
     with torch.no_grad():
-        for rgbd, label_dict in dataloader:
+        for imgs, label_dict in dataloader:
             # Move to device
-            rgbd = rgbd.to(device)
+            imgs = imgs.to(device)
 
             # Prepare labels
-            batch_size = rgbd.size(0)
+            batch_size = imgs.size(0)
             confidence = torch.zeros(batch_size, 1, dtype=torch.float32, device=device)
             vector = torch.zeros(batch_size, 3, dtype=torch.float32, device=device)
 
@@ -94,7 +94,7 @@ def validate(model, dataloader, criterion, device):
                     vector[i, :] = pointing.to(device)
 
             # Forward pass
-            outputs = model(rgbd)
+            outputs = model(imgs)
             pred_confidence = outputs[:, :1]
             pred_vector = outputs[:, 1:]
 
