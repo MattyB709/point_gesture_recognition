@@ -204,15 +204,48 @@ def train_model(model, train_loader, val_loader, num_epochs=50, lr=1e-4, device=
     if use_wandb:
         run.finish()
 
+def create_pointing_transforms_v2(target_size=224):
+    """
+    Better approach: Resize maintaining aspect ratio, then pad
+    """
+    return transforms.Compose([
+        # Resize so that shortest side = target_size
+        transforms.Resize(target_size, interpolation=transforms.InterpolationMode.BILINEAR),
+        
+        # Pad to make square (preserves aspect ratio!)
+        transforms.Pad(
+            padding=lambda img: (
+                (target_size - img.size[0]) // 2,  # left
+                (target_size - img.size[1]) // 2,  # top
+                (target_size - img.size[0] + 1) // 2,  # right
+                (target_size - img.size[1] + 1) // 2,  # bottom
+            ),
+            fill=0,
+            padding_mode='constant'
+        ),
+        
+        # Ensure exactly target_size x target_size
+        transforms.CenterCrop(target_size),
+        
+        transforms.ToTensor(),
+        
+        # ImageNet normalization
+        transforms.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225]
+        ),
+    ])
+
 if __name__ == "__main__":
     # Example usage
     weights = models.ViT_B_16_Weights.DEFAULT
     model = models.vit_b_16(weights=weights)
-    model.heads.head = torch.nn.Linear(model.heads.head.in_features, 4)  #
-    transforms = weights.transforms()
+    model.heads.head = torch.nn.Linear(model.heads.head.in_features, 4)  
+    # transforms = weights.transforms()
+    custom_transforms = create_pointing_transforms_v2(target_size=224)
     data_dir = "./split_data"
-    train_dataset = PointingDataset(data_dir + "/train", transform=transforms)
-    val_dataset = PointingDataset(data_dir + "/val", transform=transforms)
+    train_dataset = PointingDataset(data_dir + "/train", transform=custom_transforms)
+    val_dataset = PointingDataset(data_dir + "/val", transform=custom_transforms)
 
     train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True, num_workers=4)
     val_loader = DataLoader(val_dataset, batch_size=4, shuffle=False, num_workers=4)
@@ -221,5 +254,14 @@ if __name__ == "__main__":
     # model.fc = torch.nn.Linear(model.fc.in_features, 4)  # 1 for confidence + 3 for vector
 
 
-    train_model(model, train_loader, val_loader, num_epochs=100, lr=1e-4, device='cuda', use_wandb=True)
+    # train_model(model, train_loader, val_loader, num_epochs=100, lr=1e-4, device='cuda', use_wandb=True)
+    train_model(
+        model, 
+        train_loader, 
+        val_loader, 
+        num_epochs=100, 
+        lr=1e-5,  # Lower LR for ViT!
+        device='cuda', 
+        use_wandb=True
+    )
 
