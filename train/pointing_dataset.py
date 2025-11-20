@@ -8,6 +8,8 @@ import shutil
 import random
 from pathlib import Path
 import einops
+import torchvision.transforms.functional as TF
+import math
 
 class PointingDataset(Dataset):
     """
@@ -21,7 +23,24 @@ class PointingDataset(Dataset):
         - Lines 2-7 (if label==1): 6 floats (wrist_x, wrist_y, wrist_z, dir_x, dir_y, dir_z)
     """
     
-    def __init__(self, data_dir: str, transform: Optional[callable] = None, use_depth: bool = False):
+    def __init__(self, 
+        data_dir: str, 
+        transform: Optional[callable] = None, 
+        use_depth: bool = False,
+        augment: bool = True,
+        color_jitter_prob: float = 0.8,
+        brightness: float = 0.3,
+        contrast: float = 0.3,
+        saturation: float = 0.3,
+        gaussian_blur_prob: float = 0.3,
+        gaussian_noise_prob: float = 0.3,
+        noise_std: float = 0.05,
+        # Geometric augmentations (with vector correction)
+        horizontal_flip_prob: float = 0.5,
+        rotation_prob: float = 0.3,
+        max_rotation_degrees: float = 15.0,
+        normalize: bool = True,
+        ):
         """
         Args:
             data_dir: Path to directory containing .jpg, .npy, and .txt files
@@ -30,7 +49,22 @@ class PointingDataset(Dataset):
         self.data_dir = data_dir
         self.transform = transform
         self.use_depth = use_depth
-        
+        self.augment = augment
+        self.normalize = normalize
+        # Add in __init__:
+        self.mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+        self.std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+        # Augmentation settings
+        self.color_jitter_prob = color_jitter_prob
+        self.brightness = brightness
+        self.contrast = contrast
+        self.saturation = saturation
+        self.gaussian_blur_prob = gaussian_blur_prob
+        self.gaussian_noise_prob = gaussian_noise_prob
+        self.noise_std = noise_std
+        self.horizontal_flip_prob = horizontal_flip_prob
+        self.rotation_prob = rotation_prob
+        self.max_rotation_degrees = max_rotation_degrees
         # find all .jpg files (each represents a complete sample)
         self.samples = []
         if os.path.exists(data_dir):
@@ -45,40 +79,29 @@ class PointingDataset(Dataset):
                     }
                     self.samples.append(sample)
         
-        print(f"Found {len(self.samples)} samples in {data_dir}")
+        print(f"Found {len(self.samples)} samples in {data_dir}, augmentations: {augment}")
     
     def __len__(self) -> int:
         return len(self.samples)
     
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, dict]:
-        """
-        Returns:
-            rgbd_image: torch.Tensor of shape (4, H, W) - RGB-D concatenated
-            label_dict: dict containing {
-                'is_pointing': int (0 or 1),
-                'wrist_coords': torch.Tensor (3,) or None,
-                'pointing_vector': torch.Tensor (3,) or None
-            }
-        """
         sample = self.samples[idx]
         
-        # Load RGB image (BGR -> RGB)
+        # Load RGB image
         bgr_img = cv2.imread(sample['image_path'])
         rgb_img = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2RGB)
-        rgb_img = rgb_img.astype(np.float32) / 255.0  # Normalize to [0, 1]
-        rgb_img = einops.rearrange(rgb_img, 'h w c -> c h w')  # (3, H, W)
+        rgb_img = rgb_img.astype(np.float32) / 255.0
+        rgb_img = einops.rearrange(rgb_img, 'h w c -> c h w')
         
-        # Load depth image
+        # Load depth if needed
         if self.use_depth:
             depth_img = np.load(sample['depth_path'])
-            depth_img = depth_img.astype(np.float32) / 1000.0  # Convert mm to meters
-            depth_img = np.clip(depth_img, 0, 10.0)  # Clip to 0-10m range
-            depth_img = np.expand_dims(depth_img, axis=0)  # Add channel dimension (1, H, W)
-            
-            # Concatenate RGB + D to get 4D image
-            fin_img = np.concatenate([rgb_img, depth_img], axis=0)  # (4, H, W)
+            depth_img = depth_img.astype(np.float32) / 1000.0
+            depth_img = np.clip(depth_img, 0, 10.0)
+            depth_img = np.expand_dims(depth_img, axis=0)
+            fin_img = np.concatenate([rgb_img, depth_img], axis=0)
         else:
-            fin_img = rgb_img  # (3, H, W)
+            fin_img = rgb_img
         
         # Apply transform if provided
         if self.transform:
@@ -88,13 +111,94 @@ class PointingDataset(Dataset):
         label_dict = self._load_label(sample['label_path'])
         
         # Convert to torch tensors
-        fin_img = torch.from_numpy(fin_img).float()
+        image = torch.from_numpy(fin_img).float()
+        is_pointing = label_dict['is_pointing'] == 1
+        direction = torch.from_numpy(label_dict['pointing_vector']).float()
+        
+        # Augment (image AND direction)
+        if self.augment:
+            image, direction = self._apply_augmentation(image, direction, is_pointing)
+        
+        # Normalize
+        if self.normalize:
+            image = (image - self.mean) / self.std
+
+        # Update label dict with augmented direction
+        label_dict['pointing_vector'] = direction
         if label_dict['wrist_coords'] is not None:
             label_dict['wrist_coords'] = torch.from_numpy(label_dict['wrist_coords']).float()
-        if label_dict['pointing_vector'] is not None:
-            label_dict['pointing_vector'] = torch.from_numpy(label_dict['pointing_vector']).float()
 
-        return fin_img, label_dict
+        return image, label_dict  # ✅ Return augmented image
+
+
+    def _apply_augmentation(self, image: torch.Tensor, direction: torch.Tensor, is_pointing: bool):
+        """
+        Apply augmentations to image and direction.
+        Called within __getitem__, so DataLoader parallelizes this!
+        """
+        
+        # =====================================================================
+        # SAFE AUGMENTATIONS (no vector correction needed)
+        # =====================================================================
+        
+        # Color jitter
+        if random.random() < self.color_jitter_prob:
+            # Random brightness
+            brightness_factor = 1 + random.uniform(-self.brightness, self.brightness)
+            image = TF.adjust_brightness(image, brightness_factor)
+            
+            # Random contrast
+            contrast_factor = 1 + random.uniform(-self.contrast, self.contrast)
+            image = TF.adjust_contrast(image, contrast_factor)
+            
+            # Random saturation
+            saturation_factor = 1 + random.uniform(-self.saturation, self.saturation)
+            image = TF.adjust_saturation(image, saturation_factor)
+        
+        # Gaussian blur
+        if random.random() < self.gaussian_blur_prob:
+            kernel_size = random.choice([3, 5])
+            sigma = random.uniform(0.1, 2.0)
+            image = TF.gaussian_blur(image, kernel_size, [sigma, sigma])
+        
+        # Gaussian noise
+        if random.random() < self.gaussian_noise_prob:
+            noise = torch.randn_like(image) * self.noise_std
+            image = torch.clamp(image + noise, 0, 1)
+        
+        # =====================================================================
+        # GEOMETRIC AUGMENTATIONS (must transform direction too!)
+        # =====================================================================
+        
+        # Horizontal flip
+        if random.random() < self.horizontal_flip_prob:
+            image = TF.hflip(image)
+            if is_pointing:
+                direction = direction.clone()
+                direction[0] = -direction[0]  # Flip X component
+        
+        # Rotation
+        # if random.random() < self.rotation_prob:
+        #     angle = random.uniform(-self.max_rotation_degrees, self.max_rotation_degrees)
+        #     image = TF.rotate(image, angle)
+        #     if is_pointing:
+        #         direction = self._rotate_direction_z(direction, angle)
+        
+        return image, direction
+    
+    def _rotate_direction_z(self, direction: torch.Tensor, angle_degrees: float) -> torch.Tensor:
+        """Rotate direction vector around Z-axis (camera optical axis)"""
+        angle_rad = math.radians(angle_degrees)
+        cos_a = math.cos(angle_rad)
+        sin_a = math.sin(angle_rad)
+        
+        x, y, z = direction[0].item(), direction[1].item(), direction[2].item()
+        
+        new_x = x * cos_a - y * sin_a
+        new_y = x * sin_a + y * cos_a
+        new_z = z
+        
+        return torch.tensor([new_x, new_y, new_z], dtype=direction.dtype)
 
     def _load_label(self, label_path: str) -> dict:
         """Load label from .txt file"""
@@ -199,4 +303,4 @@ def split_pointing_data(data_dir, output_dir, train_ratio=0.7,
 # Example usage
 if __name__ == "__main__":
     # Create dataset
-    split_pointing_data("data", "split_data", train_ratio=0.8, val_ratio=0.2)
+    split_pointing_data("data", "split_data", train_ratio=0.85,val_ratio=0.15)

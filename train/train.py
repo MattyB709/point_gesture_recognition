@@ -143,11 +143,15 @@ def train_model(model, train_loader, val_loader, num_epochs=50, lr=1e-4, device=
                          config={"num_epochs": num_epochs, 
                                  "learning_rate": lr, 
                                  "batch_size": train_loader.batch_size, 
-                                 "model": "ResNet18"})
+                                 "model": "ResNet18",
+                                 "train_samples": len(train_loader.dataset),
+                                 "val_samples": len(val_loader.dataset),
+                                 "augmentation": True,
+                                 })
 
     # Loss and optimizer
     criterion = AngularLoss()
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.05)
 
     # Learning rate scheduler
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5,
@@ -207,15 +211,19 @@ def train_model(model, train_loader, val_loader, num_epochs=50, lr=1e-4, device=
 if __name__ == "__main__":
     # Example usage
     data_dir = "./split_data"
-    train_dataset = PointingDataset(data_dir + "/train")
-    val_dataset = PointingDataset(data_dir + "/val")
+    train_dataset = PointingDataset(data_dir + "/train", augment=True)
+    val_dataset = PointingDataset(data_dir + "/val", augment=False)
 
-    train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_dataset, batch_size=4, shuffle=False, num_workers=4)
+    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=4)
+    val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False, num_workers=4)
 
     # Example model (replace with your actual model)
     model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
-    model.fc = torch.nn.Linear(model.fc.in_features, 4)  # 1 for confidence + 3 for vector
+    # model.fc = torch.nn.Linear(model.fc.in_features, 4)  # 1 for confidence + 3 for vector
+    model.fc = torch.nn.Sequential(
+        torch.nn.Dropout(0.5),
+        torch.nn.Linear(model.fc.in_features, 4)
+    )
 
-    train_model(model, train_loader, val_loader, num_epochs=100, lr=1e-4, device='cuda', use_wandb=True)
+    train_model(model, train_loader, val_loader, num_epochs=200, lr=1e-4, device='cuda', use_wandb=True)
 

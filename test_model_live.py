@@ -12,19 +12,38 @@ import mediapipe as mp
 CONF_THRESHOLD = 0.25
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
+# model = models.resnet18()
+# model.fc = torch.nn.Linear(model.fc.in_features, 4)  # 1 conf + 3 dir
 model = models.resnet18()
-model.fc = torch.nn.Linear(model.fc.in_features, 4)  # 1 conf + 3 dir
-state_dict = torch.load("train/best_model.pth", map_location="cpu")["model_state_dict"]
+# model.fc = torch.nn.Linear(model.fc.in_features, 4)  # 1 for confidence + 3 for vector
+model.fc = torch.nn.Sequential(
+    torch.nn.Dropout(0.5),
+    torch.nn.Linear(model.fc.in_features, 4)
+)
+state_dict = torch.load("best_model.pth", map_location="cpu")["model_state_dict"]
 model.load_state_dict(state_dict, strict=True)
 model.to(device).eval()
 torch.backends.cudnn.benchmark = True
 
-# ---- preprocessing EXACTLY as you did: RGB, /255, CHW, no mean/std, no resize ----
+# MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(device)
+# STD = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(device)
+
+# def preprocess_exact(bgra_1080p):
+#     rgb = cv2.cvtColor(bgra_1080p, cv2.COLOR_BGRA2RGB)
+#     rgb = rgb.astype(np.float32) / 255.0
+#     chw = np.transpose(rgb, (2, 0, 1))  # (3,H,W)
+#     tensor = torch.from_numpy(chw)[None, ...].to(device)  # (1,3,H,W)
+    
+#     # Apply ImageNet normalization (same as training!)
+#     tensor = (tensor - MEAN) / STD
+    
+#     return tensor
+
 def preprocess_exact(bgra_1080p):
     rgb = cv2.cvtColor(bgra_1080p, cv2.COLOR_BGRA2RGB)
     rgb = rgb.astype(np.float32) / 255.0
-    chw = np.transpose(rgb, (2, 0, 1))  # (3,H,W)
-    return torch.from_numpy(chw)[None, ...].to(device)  # (1,3,H,W)
+    chw = np.transpose(rgb, (2, 0, 1))
+    return torch.from_numpy(chw)[None, ...].to(device) 
 
 # -------------------------
 # Azure Kinect config (match your capture setup)
