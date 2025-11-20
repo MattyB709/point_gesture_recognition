@@ -45,6 +45,7 @@ class PointingDataset(Dataset):
         Args:
             data_dir: Path to directory containing .jpg, .npy, and .txt files
             transform: Optional transform to apply to the image
+            depth: Whether to include depth information
         """
         self.data_dir = data_dir
         self.transform = transform
