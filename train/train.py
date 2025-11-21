@@ -242,11 +242,11 @@ def create_pointing_transforms_v2(target_size=224):
 
 if __name__ == "__main__":
     # Example usage
-    weights = models.ViT_B_16_Weights.DEFAULT
-    model = models.vit_b_16(weights=weights)
-    model.heads.head = torch.nn.Linear(model.heads.head.in_features, 4)  
+    # weights = models.ViT_B_16_Weights.DEFAULT
+    # model = models.vit_b_16(weights=weights)
+    # model.heads.head = torch.nn.Linear(model.heads.head.in_features, 4)  
     # transforms = weights.transforms()
-    custom_transforms = create_pointing_transforms_v2(target_size=224)
+    # custom_transforms = create_pointing_transforms_v2(target_size=224)
     data_dir = "./split_data"
     train_dataset = PointingDataset(data_dir + "/train")
     val_dataset = PointingDataset(data_dir + "/val")
