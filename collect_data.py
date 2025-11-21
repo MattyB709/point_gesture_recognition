@@ -155,15 +155,6 @@ if __name__ == "__main__":
                 t_pointed_to_tag_to_camera *= half_side_m
 
                 if x < X_MAX and x > 0 and y < Y_MAX and y > 0:
-                    # y0 = max(y-DETECTION_RADIUS, 0)
-                    # y1 = min(y+DETECTION_RADIUS, Y_MAX)
-                    # x0 = max(x-DETECTION_RADIUS, 0)
-                    # x1 = min(x+DETECTION_RADIUS, X_MAX)
-                    # sub_array = depth_in_color[y0:y1, x0:x1]
-                    # depth_point = np.min(sub_array)
-                    # index = np.argmin(sub_array, keepdims=True)
-                    # dy,dx = np.unravel_index(index, sub_array.shape)
-                    # x,y = x0+dx, y0+dy
                     depth_point = depth_in_color[y,x]
                     if depth_point == 0:
                         continue
