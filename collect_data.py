@@ -91,7 +91,18 @@ if __name__ == "__main__":
         
         if detections is None:
             cv2.imshow("Image", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
-            cv2.waitKey(1)
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('n'):
+                # Save negative sample (image + depth + label 0)
+                bgr_to_save = cv2.cvtColor(color, cv2.COLOR_BGRA2BGR)
+                _save_sample(
+                    bgr_to_save,
+                    depth_in_color,
+                    label=0,
+                    start_dir_cam=None
+                )
+            elif key == ord('q'):
+                break
             continue
 
         for det in detections:
