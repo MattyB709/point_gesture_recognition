@@ -19,7 +19,7 @@ class AngularLoss(nn.Module):
 
     def forward(self, pred_confidence, pred_vector, true_confidence, true_vector):
         # Classification loss
-        pred_confidence = F.sigmoid(pred_confidence)
+        pred_confidence = torch.sigmoid(pred_confidence)
         conf_loss = self.bce_loss(pred_confidence, true_confidence)
 
         # Only compute vector loss for pointing samples

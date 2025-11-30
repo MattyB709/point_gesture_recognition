@@ -6,6 +6,7 @@ from torch import optim
 from metrics import AngularLoss, angular_error
 from tqdm import tqdm
 import wandb
+from torchvision import transforms
 
 def train_epoch(model, dataloader, criterion, optimizer, device):
     """Train for one epoch"""
@@ -14,23 +15,17 @@ def train_epoch(model, dataloader, criterion, optimizer, device):
     total_loss = 0.0
     total_conf_loss = 0.0
     total_vec_loss = 0.0
+    angle_count = 0
 
     for batch_idx, (imgs, label_dict) in enumerate(dataloader):
         # Move to device
         imgs = imgs.to(device)
 
         # Prepare labels
-        batch_size = imgs.size(0)
-        confidence = torch.zeros(batch_size, 1, dtype=torch.float32, device=device)
-        vector = torch.zeros(batch_size, 3, dtype=torch.float32, device=device)
+        is_pointing = label_dict['is_pointing'].to(device).unsqueeze(1).float()
+        vector = label_dict['pointing_vector'].to(device).float()
 
-        for i in range(batch_size):
-            confidence[i, 0] = float(label_dict['is_pointing'][i])
-
-            if confidence[i, 0] != 0.0:
-                pointing = label_dict['pointing_vector'][i]
-                vector[i, :] = pointing.to(device)
-
+        angle_count += (is_pointing == 1.0).sum().item()
         # Forward pass
         outputs = model(imgs)
         
@@ -39,8 +34,7 @@ def train_epoch(model, dataloader, criterion, optimizer, device):
         pred_vector = outputs[:, 1:]
 
         # Compute loss
-        loss, conf_loss, vec_loss = criterion(pred_confidence, pred_vector, confidence, vector)
-
+        loss, conf_loss, vec_loss = criterion(pred_confidence, pred_vector, is_pointing, vector)
         # Backward pass
         optimizer.zero_grad()
         loss.backward()
@@ -49,7 +43,7 @@ def train_epoch(model, dataloader, criterion, optimizer, device):
         # Accumulate losses
         total_loss += loss.item()
         total_conf_loss += conf_loss.item()
-        total_vec_loss += vec_loss.item()
+        total_vec_loss += vec_loss.item() * (is_pointing == 1.0).sum().item()
 
         if (batch_idx + 1) % 10 == 0:
             print(f"  Batch {batch_idx + 1}/{len(dataloader)}: "
@@ -58,7 +52,7 @@ def train_epoch(model, dataloader, criterion, optimizer, device):
     # Average losses
     avg_loss = total_loss / len(dataloader)
     avg_conf_loss = total_conf_loss / len(dataloader)
-    avg_vec_loss = total_vec_loss / len(dataloader)
+    avg_vec_loss = total_vec_loss / max(angle_count, 1)
 
     return avg_loss, avg_conf_loss, avg_vec_loss
 
@@ -71,6 +65,7 @@ def validate(model, dataloader, criterion, device):
     total_conf_loss = 0.0
     total_vec_loss = 0.0
     angular_error_deg = 0.0
+    angle_count = 0
 
     # Metrics
     correct = 0
@@ -82,16 +77,11 @@ def validate(model, dataloader, criterion, device):
             imgs = imgs.to(device)
 
             # Prepare labels
-            batch_size = imgs.size(0)
-            confidence = torch.zeros(batch_size, 1, dtype=torch.float32, device=device)
-            vector = torch.zeros(batch_size, 3, dtype=torch.float32, device=device)
 
-            for i in range(batch_size):
-                confidence[i, 0] = float(label_dict['is_pointing'][i])
-
-                if confidence[i, 0] != 0.0:
-                    pointing = label_dict['pointing_vector'][i]
-                    vector[i, :] = pointing.to(device)
+            # confidence is shape (B, 1) while label_dict['is_pointing'] is (B,), so unsqueeze at 1
+            # to match shapes
+            is_pointing = label_dict['is_pointing'].to(device).unsqueeze(1).float()
+            vector = label_dict['pointing_vector'].to(device).float()
 
             # Forward pass
             outputs = model(imgs)
@@ -99,28 +89,30 @@ def validate(model, dataloader, criterion, device):
             pred_vector = outputs[:, 1:]
 
             # Compute loss
-            loss, conf_loss, vec_loss = criterion(pred_confidence, pred_vector, confidence, vector)
-            mask = (confidence == 1.0).squeeze()
+            loss, conf_loss, vec_loss = criterion(pred_confidence, pred_vector, is_pointing, vector)
+            mask = (is_pointing == 1.0).squeeze()
             if mask.sum() > 0:
-                angular_error_deg += angular_error(pred_vector[mask], vector[mask])
+                angular_error_deg += angular_error(pred_vector[mask], vector[mask]) * mask.sum().item()
+                angle_count += mask.sum().item()
 
             # Accumulate losses
             total_loss += loss.item()
             total_conf_loss += conf_loss.item()
-            total_vec_loss += vec_loss.item()
+            total_vec_loss += vec_loss.item() * mask.sum().item()
 
             # Classification accuracy
+            pred_confidence = torch.sigmoid(pred_confidence)
             pred_class = (pred_confidence > 0.5).float()
-            true_class = (confidence > 0.5).float()
+            true_class = (is_pointing > 0.5).float()
             correct += (pred_class == true_class).sum().item()
-            total += confidence.size(0)
+            total += is_pointing.size(0)
 
     # Average losses and accuracy
     avg_loss = total_loss / len(dataloader)
     avg_conf_loss = total_conf_loss / len(dataloader)
-    avg_vec_loss = total_vec_loss / len(dataloader)
+    avg_vec_loss = total_vec_loss / max(angle_count, 1)
     accuracy = 100.0 * correct / total
-    avg_angular_error = angular_error_deg / len(dataloader)
+    avg_angular_error = angular_error_deg / max(angle_count, 1)
 
     return avg_loss, avg_conf_loss, avg_vec_loss, accuracy, avg_angular_error
 
@@ -143,7 +135,7 @@ def train_model(model, train_loader, val_loader, num_epochs=50, lr=1e-4, device=
                          config={"num_epochs": num_epochs, 
                                  "learning_rate": lr, 
                                  "batch_size": train_loader.batch_size, 
-                                 "model": "ResNet18",
+                                 "model": "ViT_B_16",
                                  "train_samples": len(train_loader.dataset),
                                  "val_samples": len(val_loader.dataset),
                                  "augmentation": True,
@@ -208,57 +200,22 @@ def train_model(model, train_loader, val_loader, num_epochs=50, lr=1e-4, device=
     if use_wandb:
         run.finish()
 
-def create_pointing_transforms_v2(target_size=224):
-    """
-    Better approach: Resize maintaining aspect ratio, then pad
-    """
-    return transforms.Compose([
-        # Resize so that shortest side = target_size
-        transforms.Resize(target_size, interpolation=transforms.InterpolationMode.BILINEAR),
-        
-        # Pad to make square (preserves aspect ratio!)
-        transforms.Pad(
-            padding=lambda img: (
-                (target_size - img.size[0]) // 2,  # left
-                (target_size - img.size[1]) // 2,  # top
-                (target_size - img.size[0] + 1) // 2,  # right
-                (target_size - img.size[1] + 1) // 2,  # bottom
-            ),
-            fill=0,
-            padding_mode='constant'
-        ),
-        
-        # Ensure exactly target_size x target_size
-        transforms.CenterCrop(target_size),
-        
-        transforms.ToTensor(),
-        
-        # ImageNet normalization
-        transforms.Normalize(
-            mean=[0.485, 0.456, 0.406],
-            std=[0.229, 0.224, 0.225]
-        ),
-    ])
-
 if __name__ == "__main__":
+
     # Example usage
-    # weights = models.ViT_B_16_Weights.DEFAULT
-    # model = models.vit_b_16(weights=weights)
-    # model.heads.head = torch.nn.Linear(model.heads.head.in_features, 4)  
-    # transforms = weights.transforms()
-    # custom_transforms = create_pointing_transforms_v2(target_size=224)
+    weights = models.ViT_B_16_Weights.DEFAULT
+    model = models.vit_b_16(weights=weights)
+    model.heads.head = torch.nn.Linear(model.heads.head.in_features, 4)  
+
     data_dir = "./split_data"
-    train_dataset = PointingDataset(data_dir + "/train")
-    val_dataset = PointingDataset(data_dir + "/val")
-    # train_dataset = PointingDataset(data_dir + "/train", transform=custom_transforms)
-    # val_dataset = PointingDataset(data_dir + "/val", transform=custom_transforms)
+    train_dataset = PointingDataset(data_dir + "/train", transform=weights.transforms(), augment =False, normalize=False)
+    val_dataset = PointingDataset(data_dir + "/val", transform=weights.transforms(), augment = False, normalize=False)
 
     train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=4)
     val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False, num_workers=4)
 
-    # Example model (replace with your actual model)
-    model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
-    model.fc = torch.nn.Linear(model.fc.in_features, 4)  # 1 for confidence + 3 for vector
+    # model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+    # model.fc = torch.nn.Linear(model.fc.in_features, 4)  # 1 for confidence + 3 for vector
 
     train_model(model, train_loader, val_loader, num_epochs=100, lr=1e-4, device='cuda', use_wandb=True)
     # train_model(

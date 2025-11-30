@@ -27,7 +27,7 @@ class PointingDataset(Dataset):
         data_dir: str, 
         transform: Optional[callable] = None, 
         use_depth: bool = False,
-        augment: bool = True,
+        augment: bool = False,
         color_jitter_prob: float = 0.8,
         brightness: float = 0.3,
         contrast: float = 0.3,
@@ -91,7 +91,6 @@ class PointingDataset(Dataset):
         # Load RGB image
         bgr_img = cv2.imread(sample['image_path'])
         rgb_img = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2RGB)
-        rgb_img = rgb_img.astype(np.float32) / 255.0
         rgb_img = einops.rearrange(rgb_img, 'h w c -> c h w')
         
         # Load depth if needed
@@ -105,14 +104,16 @@ class PointingDataset(Dataset):
             fin_img = rgb_img
         
         # Apply transform if provided
+        image = torch.from_numpy(fin_img).float()
         if self.transform:
-            fin_img = self.transform(fin_img)
+            image = self.transform(image)
+        else:
+            image = image / 255.0  
 
         # Load labels
         label_dict = self._load_label(sample['label_path'])
         
         # Convert to torch tensors
-        image = torch.from_numpy(fin_img).float()
         is_pointing = label_dict['is_pointing'] == 1
         direction = torch.from_numpy(label_dict['pointing_vector']).float()
         
