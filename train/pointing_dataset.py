@@ -27,7 +27,11 @@ class PointingDataset(Dataset):
         data_dir: str, 
         transform: Optional[callable] = None, 
         use_depth: bool = False,
+<<<<<<< HEAD
         augment: bool = True,
+=======
+        augment: bool = False,
+>>>>>>> 85dfa7a61e7f0e9b1e04645a915096120e90aea6
         color_jitter_prob: float = 0.8,
         brightness: float = 0.3,
         contrast: float = 0.3,
@@ -90,7 +94,10 @@ class PointingDataset(Dataset):
         # Load RGB image
         bgr_img = cv2.imread(sample['image_path'])
         rgb_img = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2RGB)
+<<<<<<< HEAD
         rgb_img = rgb_img.astype(np.float32) / 255.0
+=======
+>>>>>>> 85dfa7a61e7f0e9b1e04645a915096120e90aea6
         rgb_img = einops.rearrange(rgb_img, 'h w c -> c h w')
         
         # Load depth if needed
@@ -104,14 +111,20 @@ class PointingDataset(Dataset):
             fin_img = rgb_img
         
         # Apply transform if provided
+        image = torch.from_numpy(fin_img).float()
         if self.transform:
-            fin_img = self.transform(fin_img)
+            image = self.transform(image)
+        else:
+            image = image / 255.0  
 
         # Load labels
         label_dict = self._load_label(sample['label_path'])
         
         # Convert to torch tensors
+<<<<<<< HEAD
         image = torch.from_numpy(fin_img).float()
+=======
+>>>>>>> 85dfa7a61e7f0e9b1e04645a915096120e90aea6
         is_pointing = label_dict['is_pointing'] == 1
         direction = torch.from_numpy(label_dict['pointing_vector']).float()
         
@@ -303,4 +316,8 @@ def split_pointing_data(data_dir, output_dir, train_ratio=0.7,
 # Example usage
 if __name__ == "__main__":
     # Create dataset
+<<<<<<< HEAD
     split_pointing_data("data", "split_data", train_ratio=0.85,val_ratio=0.15)
+=======
+    split_pointing_data("data", "split_data", train_ratio=0.85,val_ratio=0.15)
+>>>>>>> 85dfa7a61e7f0e9b1e04645a915096120e90aea6
