@@ -1,6 +1,8 @@
 import torch
 from torchvision import models
 from pointing_dataset import PointingDataset 
+import mediapipe_dataset
+from joint_transformer import create_joint_transformer
 from torch.utils.data import DataLoader
 from torch import optim
 from metrics import AngularLoss, angular_error
@@ -259,8 +261,30 @@ if __name__ == "__main__":
     train_dataset = PointingDataset(data_dir + "/train", augment =True, normalize=True)
     val_dataset = PointingDataset(data_dir + "/val", augment = False, normalize=True)
 
-    train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_dataset, batch_size=4, shuffle=False, num_workers=4)
+    # Pose Data Transformer
+    # K = np.array([[919.76178, 0,     962.6875],
+    #           [0,        919.8909, 550.9944],
+    #           [0,        0,        1]], dtype=np.float64)
+    
+    # train_dataset = mediapipe_dataset.create_train_dataset(
+    #     "./split_data/train",
+    #     use_kinect_depth=True,
+    #     K=K
+    # )
+
+    # val_dataset = mediapipe_dataset.create_val_dataset(
+    #     "./split_data/val",
+    #     use_kinect_depth=True,
+    #     K=K
+    # )
+
+    # train_dataset.precompute_all_joints()
+    # val_dataset.precompute_all_joints()
+
+    # model = create_joint_transformer()
+
+    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=4)
+    val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False, num_workers=4)
 
     # model_name = "ResNet18"
     # train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-4, device='cuda', use_wandb=True, use_amp=True, notes="Not pretrained")
