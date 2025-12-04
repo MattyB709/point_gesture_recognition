@@ -16,6 +16,17 @@ DETECTION_RADIUS = 15 # find the min depth in a 10x10 pixel square
 Y_MAX = 1080
 X_MAX = 1920
 
+def draw_detections(image, detections):
+    for det in detections:
+        corners = det.corners
+
+        # Convert the corners to integer
+        corners = corners.astype(int)
+
+        # Draw the corners (a polygon) using polylines
+        image = cv2.polylines(image, [corners], isClosed=True, color=(0, 255, 0), thickness=2)
+    return image
+
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def _stamp():
@@ -105,14 +116,7 @@ if __name__ == "__main__":
                 break
             continue
 
-        for det in detections:
-            corners = det.corners
-
-            # Convert the corners to integer
-            corners = corners.astype(int)
-
-            # Draw the corners (a polygon) using polylines
-            rgb = cv2.polylines(rgb, [corners], isClosed=True, color=(0, 255, 0), thickness=2)
+        draw_detections(rgb, detections)
 
 
         if result.pose_landmarks:

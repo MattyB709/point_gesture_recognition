@@ -74,12 +74,10 @@ mp_hands = mp.solutions.hands
 
 # Global calibration hook; set this externally if you want true Kinect 3D->2D.
 # Example (in your own setup code):
-#   from pyk4a import PyK4A, Config
-#   k4a = PyK4A(Config())
-#   k4a.start()
-#   from this_script import K4A_CALIBRATION
-#   K4A_CALIBRATION = k4a.calibration
-K4A_CALIBRATION = None
+from pyk4a import PyK4A, Config
+k4a = PyK4A(Config())
+k4a.start()
+K4A_CALIBRATION = k4a.calibration
 
 
 # ==========================
