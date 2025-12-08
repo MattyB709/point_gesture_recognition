@@ -75,72 +75,88 @@ while True:
     rgb = cv2.cvtColor(color_bgra, cv2.COLOR_BGRA2RGB)
     result = pose.process(rgb)
     detections = get_detections(rgb)
-    draw_detections(rgb, detections)
+    if detections is not None:
+        draw_detections(rgb, detections)
 
-    if result.pose_landmarks:
-        landmarks = result.pose_landmarks.landmark
-        left_wrist = landmarks[mp.solutions.pose.PoseLandmark.LEFT_WRIST]
-        # Coordinates are normalized (0–1 range)
-        x,y = left_wrist.x, left_wrist.y
-        x *= rgb.shape[1]
-        y *= rgb.shape[0]
-        x,y = int(x), int(y)
-        rgb = cv2.circle(rgb, (x, y), radius=3, color=(0, 255, 0), thickness=-1)
-        if x < X_MAX and x > 0 and y < Y_MAX and y > 0:
-            depth_point = depth_in_color[y,x]
-            if depth_point == 0:
-                continue
-            xmm, ymm, zmm = calib.convert_2d_to_3d((x, y), depth_point, 
-                                                CalibrationType.COLOR)
-            xm = xmm / 1000
-            ym = ymm / 1000
-            zm = zmm / 1000
-    
-            with torch.no_grad():
-                inp = preprocess_exact(color_bgra)         # (1,3,H,W) on CUDA
-                out = model(inp)                           # (1,4)
-                conf = torch.sigmoid(out[:, :1]).item()    # scalar in [0,1]
-                vec = F.normalize(out[:, 1:], p=2, dim=1)[0].detach().cpu().numpy()  # (3,)
-
-            if detections is not None and len(detections) > 0:
-                H = detections[0].homography.astype(np.float64)
-                id = detections[0].id
-
-                tag_to_world = transformation_map[id]
-                tag_to_camera = decompose_homography(H)
-                camera_to_tag = np.linalg.inv(tag_to_camera)
-                camera_to_world = tag_to_world @ camera_to_tag
-
-                x_t, y_t, z_t = xm / HALF_SIDE_M, ym / HALF_SIDE_M, zm / HALF_SIDE_M
-                wrist_coords = np.array([x_t, y_t, z_t, 1])
-                wrist_coords_world = camera_to_world @ wrist_coords
-                x_w, y_w, z_w, _ = wrist_coords_world
-                # convert to tag coordinates
-
-                if conf > CONF_THRESHOLD:
-                    vx, vy, vz = vec
-                    rotation_matrix = camera_to_world[:3, :3]
-                    vec_world = rotation_matrix @ vec
-                    vx, vy, vz = vec_world
-                    # avoid division by zero
-                    if abs(vz) < 1e-6:
-                        continue
-
-                    t = -z_w / vz
-                    x_intersect = x_w + vx * t
-                    y_intersect = y_w + vy * t
-
-                    min_dist = float('inf')
-                    closest_id = -1
-                    for tag_id, matrix in transformation_map.items():
-                        tag_x = matrix[0, 3]
-                        tag_y = matrix[1, 3]
-                        dist = np.sqrt((x_intersect - tag_x)**2 + (y_intersect - tag_y)**2)
-                        if dist < min_dist:
-                            min_dist = dist
-                            closest_id = tag_id
-                    print(f"Pointing at tag ID: {closest_id} with distance {min_dist*HALF_SIDE_M*100:.2f} cm")
+        if result.pose_landmarks:
+            landmarks = result.pose_landmarks.landmark
+            left_wrist = landmarks[mp.solutions.pose.PoseLandmark.LEFT_WRIST]
+            # Coordinates are normalized (0–1 range)
+            x,y = left_wrist.x, left_wrist.y
+            x *= rgb.shape[1]
+            y *= rgb.shape[0]
+            x,y = int(x), int(y)
+            rgb = cv2.circle(rgb, (x, y), radius=3, color=(0, 255, 0), thickness=-1)
+            if x < X_MAX and x > 0 and y < Y_MAX and y > 0:
+                depth_point = depth_in_color[y,x]
+                if depth_point == 0:
+                    continue
+                xmm, ymm, zmm = calib.convert_2d_to_3d((x, y), depth_point, 
+                                                    CalibrationType.COLOR)
+                xm = xmm / 1000
+                ym = ymm / 1000
+                zm = zmm / 1000
+                wrist_mm = np.array([xmm, ymm, zmm])
         
+                with torch.no_grad():
+                    inp = preprocess_exact(color_bgra)         # (1,3,H,W) on CUDA
+                    out = model(inp)                           # (1,4)
+                    conf = torch.sigmoid(out[:, :1]).item()    # scalar in [0,1]
+                    vec = F.normalize(out[:, 1:], p=2, dim=1)[0].detach().cpu().numpy()  # (3,)
+
+                if detections is not None and len(detections) > 0:
+                    H = detections[0].homography.astype(np.float64)
+                    id = detections[0].tag_id
+
+                    tag_to_world = transformation_map[id]
+                    tag_to_camera = decompose_homography(H)
+                    camera_to_tag = np.linalg.inv(tag_to_camera)
+                    camera_to_world = tag_to_world @ camera_to_tag
+
+                    x_t, y_t, z_t = xm / HALF_SIDE_M, ym / HALF_SIDE_M, zm / HALF_SIDE_M
+                    wrist_coords = np.array([x_t, y_t, z_t, 1])
+                    wrist_coords_world = camera_to_world @ wrist_coords
+                    x_w, y_w, z_w, _ = wrist_coords_world
+                    # convert to tag coordinates
+
+                    if conf > CONF_THRESHOLD:
+                        end_mm = wrist_mm + vec * 300
+                        uv_wrist = calib.convert_3d_to_2d(tuple(wrist_mm.tolist()),
+                                                        CalibrationType.COLOR, CalibrationType.COLOR)
+                        uv_end = calib.convert_3d_to_2d(tuple(end_mm.tolist()),
+                                                        CalibrationType.COLOR, CalibrationType.COLOR)
+                        if uv_wrist is not None and uv_end is not None:
+                            p0 = tuple(map(int, uv_wrist))
+                            p1 = tuple(map(int, uv_end))
+                            cv2.line(rgb, p0, p1, (0, 255, 0), 2)
+                            cv2.putText(rgb, f"conf={conf:.2f}", (p0[0]+6, p0[1]-6),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (50, 255, 50), 1, cv2.LINE_AA)
+                        vx, vy, vz = vec
+                        rotation_matrix = camera_to_world[:3, :3]
+                        vec_world = rotation_matrix @ vec
+                        vx, vy, vz = vec_world
+                        # avoid division by zero
+                        if abs(vz) < 1e-6:
+                            continue
+
+                        t = -z_w / vz
+                        x_intersect = x_w + vx * t
+                        y_intersect = y_w + vy * t
+
+                        min_dist = float('inf')
+                        closest_id = -1
+                        for tag_id, matrix in transformation_map.items():
+                            tag_x = matrix[0, 3]
+                            tag_y = matrix[1, 3]
+                            dist = np.sqrt((x_intersect - tag_x)**2 + (y_intersect - tag_y)**2)
+                            if dist < min_dist:
+                                min_dist = dist
+                                closest_id = tag_id
+                        print(f"Pointing at tag ID: {closest_id} with distance {min_dist*HALF_SIDE_M*100:.2f} cm")
+    cv2.imshow("frame", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+    if cv2.waitKey(1) == ord('q'):
+        break
+            
 
         
 

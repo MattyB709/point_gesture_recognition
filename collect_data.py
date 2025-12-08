@@ -65,26 +65,26 @@ def _save_sample(bgr_img, depth_in_color, label, start_dir_cam=None):
 PATH = 'pose_landmarker.task'
 
 # mediapipe object
-base_options = python.BaseOptions(model_asset_path=PATH)
-options = vision.PoseLandmarkerOptions(base_options=base_options, output_segmentation_masks=False)
-cfg = Config(
-    color_resolution=ColorResolution.RES_1080P,       # 1920x1080
-    depth_mode=DepthMode.NFOV_UNBINNED,               # 640x576 depth
-    synchronized_images_only=True,                     # depth+color in same capture
-    camera_fps= FPS.FPS_15
-)
-k4a = PyK4A(cfg)
-k4a.start()
-pointed_to_id = -1
-half_side_m = 10 / 100.0  # meters per "tag unit" (tag family canonical: half-side = 1 unit)
-with open("transformation_map.json", "r") as f:
-    loaded = json.load(f)
-
-# Convert lists back to numpy arrays
-transformation_map = {int(k): np.array(v) for k, v in loaded.items()}
-print("input a tag to point at: ")
-pointed_to_id = int(input())
 if __name__ == "__main__":
+    base_options = python.BaseOptions(model_asset_path=PATH)
+    options = vision.PoseLandmarkerOptions(base_options=base_options, output_segmentation_masks=False)
+    cfg = Config(
+        color_resolution=ColorResolution.RES_1080P,       # 1920x1080
+        depth_mode=DepthMode.NFOV_UNBINNED,               # 640x576 depth
+        synchronized_images_only=True,                     # depth+color in same capture
+        camera_fps= FPS.FPS_15
+    )
+    k4a = PyK4A(cfg)
+    k4a.start()
+    pointed_to_id = -1
+    half_side_m = 10 / 100.0  # meters per "tag unit" (tag family canonical: half-side = 1 unit)
+    with open("transformation_map.json", "r") as f:
+        loaded = json.load(f)
+
+    # Convert lists back to numpy arrays
+    transformation_map = {int(k): np.array(v) for k, v in loaded.items()}
+    print("input a tag to point at: ")
+    pointed_to_id = int(input())
     mp_pose = mp.solutions.pose
     pose = mp_pose.Pose()
   
@@ -189,7 +189,6 @@ if __name__ == "__main__":
                     except Exception:
                         pass
 
-                    
 
                     # draw vector on 2D image connecting wrist and calculated point
         cv2.imshow("Image", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
