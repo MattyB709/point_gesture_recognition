@@ -60,7 +60,7 @@ from pyk4a import PyK4A, Config, CalibrationType
 # CONFIG
 # ==========================
 
-DEFAULT_DATA_DIR = "../data"
+DEFAULT_DATA_DIR = "data"
 DEFAULT_OUT_SUBDIR = "gt_debug_ray"
 
 IMAGE_EXT = ".jpg"
