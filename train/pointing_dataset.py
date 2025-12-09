@@ -27,11 +27,7 @@ class PointingDataset(Dataset):
         data_dir: str, 
         transform: Optional[callable] = None, 
         use_depth: bool = False,
-<<<<<<< HEAD
-        augment: bool = True,
-=======
         augment: bool = False,
->>>>>>> 85dfa7a61e7f0e9b1e04645a915096120e90aea6
         color_jitter_prob: float = 0.8,
         brightness: float = 0.3,
         contrast: float = 0.3,
@@ -50,6 +46,11 @@ class PointingDataset(Dataset):
             data_dir: Path to directory containing .jpg, .npy, and .txt files
             transform: Optional transform to apply to the image
         """
+        bad_samples = ["11-06-170347", "11-06-170426", "11-06-170921", "11-06-171808", "11-06-171956",
+                       "11-06-180212", "11-06-181423", "11-11-163407", "11-11-164209", "11-11-164347", "11-11-165140",
+                       "11-18-161216", "11-18-161218", "11-18-161258", "11-18-161658", "11-18-161746","11-18-162038",
+                       "11-18-162046","11-18-162051","11-18-162158","11-18-162332","11-18-162453", "11-18-162525","11-18-163002",
+                       "11-18-163004","11-18-163132","11-18-163841", ]
         self.data_dir = data_dir
         self.transform = transform
         self.use_depth = use_depth
@@ -75,6 +76,8 @@ class PointingDataset(Dataset):
             for filename in os.listdir(data_dir):
                 if filename.endswith('.jpg'):
                     base_name = filename[:-4]  # remove .jpg extension
+                    if base_name in bad_samples:
+                        continue
                     sample = {
                         'base_name': base_name,
                         'image_path': os.path.join(data_dir, filename),
@@ -94,10 +97,6 @@ class PointingDataset(Dataset):
         # Load RGB image
         bgr_img = cv2.imread(sample['image_path'])
         rgb_img = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2RGB)
-<<<<<<< HEAD
-        rgb_img = rgb_img.astype(np.float32) / 255.0
-=======
->>>>>>> 85dfa7a61e7f0e9b1e04645a915096120e90aea6
         rgb_img = einops.rearrange(rgb_img, 'h w c -> c h w')
         
         # Load depth if needed
@@ -121,10 +120,6 @@ class PointingDataset(Dataset):
         label_dict = self._load_label(sample['label_path'])
         
         # Convert to torch tensors
-<<<<<<< HEAD
-        image = torch.from_numpy(fin_img).float()
-=======
->>>>>>> 85dfa7a61e7f0e9b1e04645a915096120e90aea6
         is_pointing = label_dict['is_pointing'] == 1
         direction = torch.from_numpy(label_dict['pointing_vector']).float()
         
@@ -184,11 +179,11 @@ class PointingDataset(Dataset):
         # =====================================================================
         
         # Horizontal flip
-        if random.random() < self.horizontal_flip_prob:
-            image = TF.hflip(image)
-            if is_pointing:
-                direction = direction.clone()
-                direction[0] = -direction[0]  # Flip X component
+        # if random.random() < self.horizontal_flip_prob:
+        #     image = TF.hflip(image)
+        #     if is_pointing:
+        #         direction = direction.clone()
+        #         direction[0] = -direction[0]  # Flip X component
         
         # Rotation
         # if random.random() < self.rotation_prob:
@@ -307,8 +302,8 @@ def split_pointing_data(data_dir, output_dir, train_ratio=0.7,
         d = Path(output_dir) / name
         d.mkdir(parents=True, exist_ok=True)
         for s in split:
-            for k in ['jpg', 'npy', 'txt']:
-                shutil.copy2(s[k], d / s[k].name)
+            for k in ['jpg', 'txt']:
+                shutil.move(s[k], d / s[k].name)
         print(f"✓ {name}: {len(split)} samples")
 
     return {'train': len(train), 'val': len(val), 'test': len(test)}
@@ -316,8 +311,4 @@ def split_pointing_data(data_dir, output_dir, train_ratio=0.7,
 # Example usage
 if __name__ == "__main__":
     # Create dataset
-<<<<<<< HEAD
     split_pointing_data("data", "split_data", train_ratio=0.85,val_ratio=0.15)
-=======
-    split_pointing_data("data", "split_data", train_ratio=0.85,val_ratio=0.15)
->>>>>>> 85dfa7a61e7f0e9b1e04645a915096120e90aea6
