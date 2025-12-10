@@ -6,3 +6,4 @@ venv/
 transformation_map.json
 wandb/
 *.pth
+check_data/
