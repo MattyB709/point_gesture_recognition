@@ -6,7 +6,6 @@ import json
 from pyk4a import PyK4A, Config, ColorResolution, DepthMode, FPS
 from pyk4a import CalibrationType
 
-if __name__
 cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
 cv2.namedWindow("Detected AprilTags", cv2.WINDOW_NORMAL)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)

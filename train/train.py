@@ -14,7 +14,7 @@ from datetime import datetime
 from torch.amp import GradScaler
 
 # use for early stopping, if val loss doesn't decrease for PATIENCE epochs, kill the run
-PATIENCE = 50
+PATIENCE = 25
 
 def train_epoch(model, dataloader, criterion, optimizer, device, scaler, use_amp = False):
     """Train for one epoch"""
@@ -219,6 +219,7 @@ def train_model(model_name, train_loader, val_loader, num_epochs=50, lr=1e-4, de
         if val_angular_error < best_val_angular_error:
             best_val_angular_error = val_angular_error
             torch.save({
+                'epoch': epoch,
                 'model_state_dict': model.state_dict(),
             }, f'trained_models/{run_name}.pth')
             print("✓ Saved best model")
@@ -315,9 +316,9 @@ def create_model(model_name: str):
         model.fc = torch.nn.Linear(model.fc.in_features, 4)  # 1 for confidence + 3 for vector
     elif model_name == "ResNet50":
         model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+        model.fc = torch.nn.Linear(model.fc.in_features, 4)  # 1 for confidence + 3 for vector
         # for param in model.parameters():
         #     param.requires_grad = False
-        model.fc = torch.nn.Linear(model.fc.in_features, 4)  # 1 for confidence + 3 for vector
         # model.fc = torch.nn.Sequential(
         #     torch.nn.Dropout(0.5),  # ← Add this!
         #     torch.nn.Linear(model.fc.in_features, 256),
@@ -385,7 +386,8 @@ class ResizeWithPad:
         
         return im101g
 
-
+# for param in model.parameters():
+        #     param.requires_grad = False
 def create_pointing_transforms_with_padding(target_size=224):
     """
     Better quality: Resize maintaining aspect ratio, then pad to square.
@@ -404,56 +406,8 @@ def create_pointing_transforms_with_padding(target_size=224):
 if __name__ == "__main__":
 
     # Example usage 
-    custom_transforms = create_pointing_transforms_with_padding(target_size=224)
-    weights = models.ViT_B_16_Weights.transforms
 
     data_dir = "./split_data"
-    # train_dataset = ViTDataset(
-    #     "./split_data/train",
-    #     transform=custom_transforms,
-    #     augment=True  # Augments direction vectors
-    # )
-    
-    # val_dataset = ViTDataset(
-    #     "./split_data/val",
-    #     transform=custom_transforms,
-    #     augment=False
-    # )
-    # train_dataset = ViTDatasetAggressive(
-    #     "./split_data/train",
-    #     transform=custom_transforms,
-    #     augment=True  # Augments direction vectors
-    # )
-    
-    # val_dataset = ViTDatasetAggressive(
-    #     "./split_data/val",
-    #     transform=custom_transforms,
-    #     augment=False
-    # )
-    # train_dataset = PointingDataset(data_dir + "/train", augment =False, normalize=False, transform=custom_transforms)
-    # val_dataset = PointingDataset(data_dir + "/val", augment = False, normalize=False, transform=custom_transforms)
-
-    # Pose Data Transformer
-    # K = np.array([[919.76178, 0,     962.6875],
-    #           [0,        919.8909, 550.9944],
-    #           [0,        0,        1]], dtype=np.float64)
-    
-    # train_dataset = mediapipe_dataset.create_train_dataset(
-    #     "./split_data/train",
-    #     use_kinect_depth=True,
-    #     K=K
-    # )
-
-    # val_dataset = mediapipe_dataset.create_val_dataset(
-    #     "./split_data/val",
-    #     use_kinect_depth=True,
-    #     K=K
-    # )
-
-    # train_dataset.precompute_all_joints()
-    # val_dataset.precompute_all_joints()
-
-    # model = create_joint_transformer()
 
     train_dataset = PointingDataset(data_dir + "/train", augment = True, normalize=True)
     val_dataset = PointingDataset(data_dir + "/val", augment = False, normalize=True)
@@ -466,4 +420,4 @@ if __name__ == "__main__":
     # val_loader = DataLoader(val_dataset, batch_size=8, shuffle=False, num_workers=4)
     model_name = "ResNet50"
     train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-5, device='cuda', use_wandb=True, use_amp=True, 
-                notes="training with cleaned data", aux_name="new_data")
+                notes="training with cleaned data", aux_name="clean_data")

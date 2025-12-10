@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from torchvision import models
 from pyk4a import PyK4A, Config, ColorResolution, DepthMode, FPS, CalibrationType
 import mediapipe as mp
+import time
 
 def create_resnet_frozen(model_name="ResNet50", freeze_until_layer=2, dropout=0.5):
     """
@@ -56,6 +57,7 @@ CONF_THRESHOLD = 0.0
 device = "cuda" if torch.cuda.is_available() else "cpu"
 MEAN = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1).to(device)
 STD = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1).to(device)
+
 def preprocess_exact(bgra_1080p):
     rgb = cv2.cvtColor(bgra_1080p, cv2.COLOR_BGRA2RGB)
     rgb = rgb.astype(np.float32) / 255.0
@@ -78,24 +80,14 @@ if __name__ == "__main__":
     #     freeze_until_layer=2,  # Must match training
     #     dropout=0.5            # Must match training
     # )
-    model = models.resnet101()
+    model = models.resnet50()
     model.fc = torch.nn.Linear(model.fc.in_features, 4)
-    state_dict = torch.load("ResNet101_augTrue_ampTrue_2025-12-02 14:55.pth", map_location="cpu")["model_state_dict"]
+    state_dict = torch.load("trained_models/ResNet50_augTrue_ampTrue_2025-11-30 20:49.pth", map_location="cpu")["model_state_dict"]
     model.load_state_dict(state_dict, strict=True)
     model.to(device).eval()
     torch.backends.cudnn.benchmark = True
 
 
-    # def preprocess_exact(bgra_1080p):
-    #     rgb = cv2.cvtColor(bgra_1080p, cv2.COLOR_BGRA2RGB)
-    #     rgb = rgb.astype(np.float32) / 255.0
-    #     chw = np.transpose(rgb, (2, 0, 1))  # (3,H,W)
-    #     tensor = torch.from_numpy(chw)[None, ...].to(device)  # (1,3,H,W)
-        
-    #     # Apply ImageNet normalization (same as training!)
-    #     tensor = (tensor - MEAN) / STD
-        
-    #     return tensor
 
 
     # -------------------------
@@ -103,7 +95,7 @@ if __name__ == "__main__":
     # -------------------------
     cfg = Config(
         color_resolution=ColorResolution.RES_1080P,  # 1920x1080
-        depth_mode=DepthMode.NFOV_UNBINNED,         # 640x576 depth (aligned available)
+        depth_mode=DepthMode.NFOV_2X2BINNED,         # 640x576 depth (aligned available)
         synchronized_images_only=True,
         camera_fps=FPS.FPS_15,
     )
@@ -146,19 +138,25 @@ if __name__ == "__main__":
         if wrist_px is not None:
             x, y = wrist_px
             depth_mm = int(depth_in_color[y, x])
+            
             if depth_mm > 0:
                 # 2D+depth -> 3D (mm) in COLOR camera frame
-                xmm, ymm, zmm = calib.convert_2d_to_3d((x, y), depth_mm, CalibrationType.COLOR)
+                try:
+                    xmm, ymm, zmm = calib.convert_2d_to_3d((x, y), depth_mm, CalibrationType.COLOR)
+                except:
+                    print("fail 1")
+                    continue
                 wrist_mm = np.array([xmm, ymm, zmm], dtype=np.float32)
 
                 # Model forward (no normalization besides /255; no resize)
                 with torch.no_grad():
                     inp = preprocess_exact(color_bgra)         # (1,3,H,W) on CUDA
-                    out = model(inp)                           # (1,4)
+                    with torch.autocast(device_type = 'cuda', dtype=torch.float16, enabled=True):
+                        out = model(inp)                           # (1,4)
                     conf = torch.sigmoid(out[:, :1]).item()    # scalar in [0,1]
                     vec = F.normalize(out[:, 1:], p=2, dim=1)[0].detach().cpu().numpy()  # (3,)
 
-                if conf > CONF_THRESHOLD:  # optional threshold
+                if conf >= CONF_THRESHOLD:  # optional threshold
                     end_mm = wrist_mm + vec * SCALE_MM
                     uv_wrist = calib.convert_3d_to_2d(tuple(wrist_mm.tolist()),
                                                     CalibrationType.COLOR, CalibrationType.COLOR)
@@ -170,6 +168,12 @@ if __name__ == "__main__":
                         cv2.line(disp, p0, p1, (0, 255, 0), 2)
                         cv2.putText(disp, f"conf={conf:.2f}", (p0[0]+6, p0[1]-6),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (50, 255, 50), 1, cv2.LINE_AA)
+                    else:
+                        print("Projection failed.")
+            else:
+                print("Invalid depth at wrist.")
+                print(depth_in_color[y-5:y+6, x-5:x+6])
+                print(depth_mm)
 
         cv2.imshow("Realtime Pointing (q to quit)", disp)
         if (cv2.waitKey(1) & 0xFF) == ord('q'):
