@@ -32,14 +32,14 @@ if __name__ == "__main__":
     k4a = PyK4A(cfg)
     k4a.start()
     calib = k4a.calibration                    # pyk4a Calibration object (intrinsics+extrinsics)
-    for file in os.listdir("data"):
+    for file in os.listdir("split_data/val"):
         
         print(f"Processing {file}...")
         if not file.endswith(".txt"):
             continue
-        txt_path = os.path.join("data", file)
+        txt_path = os.path.join("split_data/val", file)
         base_name = file[:-4]
-        img_path = os.path.join("data", base_name + ".jpg")
+        img_path = os.path.join("split_data/val", base_name + ".jpg")
         color_img = cv2.imread(img_path)
 
         with open(txt_path, "r") as f:
