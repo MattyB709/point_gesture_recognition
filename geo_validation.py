@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 
-# run by doing python3 geo_validition.py <root_dir_of_val_data>
-
-# green is geometric vector
-# the magenta is the original vector from the april tags.
+# run by doing:
+#   python3 geo_validation.py <root_dir_of_val_data> --start LEFT_WRIST --end LEFT_INDEX
+# you can choose what media pipe joints to use for the geometric 
+# vector, just change the --start and --end args.
+# green is geometric vector (from chosen start->end MP joints)
+# magenta is the original vector from the AprilTags.
 
 import os
 import glob
@@ -65,14 +67,14 @@ def camera_to_pixel_mm(point_mm, K):
     return np.array([u, v], dtype=np.float32)
 
 
-def draw_vector_from_wrist_mm(img_bgr, K, wrist_mm, vec_unit, length_mm,
+def draw_vector_from_point_mm(img_bgr, K, start_mm, vec_unit, length_mm,
                               color, thickness=2):
     """
-    Draws a ray starting at wrist_mm along vec_unit for length_mm (all in mm),
+    Draws a ray starting at start_mm along vec_unit for length_mm (all in mm),
     projected to image using intrinsics K, onto img_bgr with given color.
     """
-    start_px = camera_to_pixel_mm(wrist_mm, K)
-    end_mm = wrist_mm + vec_unit * float(length_mm)
+    start_px = camera_to_pixel_mm(start_mm, K)
+    end_mm = start_mm + vec_unit * float(length_mm)
     end_px = camera_to_pixel_mm(end_mm, K)
 
     if start_px is None or end_px is None:
@@ -134,8 +136,73 @@ def load_original_pose(orig_txt_path):
     return 1, orig_wrist_m, orig_vec
 
 
-def main(root_dir="val"):
+def compute_average_angular_error(txt_folder):
+    """
+    Equivalent of average_8th_line(folder), but returns (avg, count)
+    and skips any AVERAGE_*.txt file.
+    """
+    total = 0.0
+    count = 0
+
+    for name in os.listdir(txt_folder):
+        if not name.endswith(".txt"):
+            continue
+        if name.startswith("AVERAGE_"):
+            # Don't re-include old summary files if re-running.
+            continue
+
+        path = os.path.join(txt_folder, name)
+
+        try:
+            with open(path, "r") as f:
+                lines = f.readlines()
+        except OSError as e:
+            print(f"Skipping {name}: could not open file ({e})")
+            continue
+
+        if len(lines) < 8:
+            # No 8th line (e.g., non-pointing or invalid file)
+            continue
+
+        raw = lines[7].strip()
+        if not raw:
+            continue
+
+        try:
+            value = float(raw)
+        except ValueError:
+            print(f"Skipping {name}: 8th line is not a number -> {raw!r}")
+            continue
+
+        total += value
+        count += 1
+
+    if count == 0:
+        return None, 0
+
+    avg = total / count
+    return avg, count
+
+
+def main(root_dir="val", start_joint_name="LEFT_WRIST", end_joint_name="LEFT_INDEX"):
     mp_pose = mp.solutions.pose
+
+    # Resolve landmark enums from provided joint names.
+    try:
+        start_lmk = mp_pose.PoseLandmark[start_joint_name]
+        end_lmk = mp_pose.PoseLandmark[end_joint_name]
+    except KeyError:
+        valid_names = [lm.name for lm in mp_pose.PoseLandmark]
+        raise ValueError(
+            f"Invalid joint name(s): start={start_joint_name}, end={end_joint_name}. "
+            f"Valid names include: {valid_names}"
+        )
+
+    start_idx = start_lmk.value
+    end_idx = end_lmk.value
+
+    pair_tag = f"{start_joint_name}_TO_{end_joint_name}"
+    print(f"Using joint pair: {pair_tag}")
 
     pose = mp_pose.Pose(
         static_image_mode=True,
@@ -145,9 +212,10 @@ def main(root_dir="val"):
         min_tracking_confidence=0.5,
     )
 
-    # Output folders
-    out_txt_dir = os.path.join(root_dir, "geo_txt")
-    out_vis_dir = os.path.join(root_dir, "geo_vis")
+    # Output folders now include the pair tag.
+    pair_dir = os.path.join(root_dir, pair_tag)
+    out_txt_dir = os.path.join(pair_dir, "geo_txt")
+    out_vis_dir = os.path.join(pair_dir, "geo_vis")
     os.makedirs(out_txt_dir, exist_ok=True)
     os.makedirs(out_vis_dir, exist_ok=True)
 
@@ -206,36 +274,36 @@ def main(root_dir="val"):
             continue
 
         lms = results.pose_landmarks.landmark
-        lw = lms[mp_pose.PoseLandmark.LEFT_WRIST]
-        li = lms[mp_pose.PoseLandmark.LEFT_INDEX]
+        start_lm = lms[start_idx]
+        end_lm = lms[end_idx]
 
         # 2D coords in the RGB image
-        u_w = int(lw.x * w_img)
-        v_w = int(lw.y * h_img)
-        u_i = int(li.x * w_img)
-        v_i = int(li.y * h_img)
+        u_start = int(start_lm.x * w_img)
+        v_start = int(start_lm.y * h_img)
+        u_end = int(end_lm.x * w_img)
+        v_end = int(end_lm.y * h_img)
 
-        if not (0 <= u_w < w_img and 0 <= v_w < h_img and
-                0 <= u_i < w_img and 0 <= v_i < h_img):
+        if not (0 <= u_start < w_img and 0 <= v_start < h_img and
+                0 <= u_end < w_img and 0 <= v_end < h_img):
             print(f"[SKIP] Landmarks out of bounds for {base}")
             continue
 
         # Map to depth resolution if needed
-        u_w_d = int(u_w * w_d / w_img)
-        v_w_d = int(v_w * h_d / h_img)
-        u_i_d = int(u_i * w_d / w_img)
-        v_i_d = int(v_i * h_d / h_img)
+        u_start_d = int(u_start * w_d / w_img)
+        v_start_d = int(v_start * h_d / h_img)
+        u_end_d = int(u_end * w_d / w_img)
+        v_end_d = int(v_end * h_d / h_img)
 
         # Back-project to 3D in camera frame (mm)
-        wrist_cam_mm = pixel_to_camera_mm(u_w_d, v_w_d, depth, K_COLOR)
-        finger_cam_mm = pixel_to_camera_mm(u_i_d, v_i_d, depth, K_COLOR)
+        start_cam_mm = pixel_to_camera_mm(u_start_d, v_start_d, depth, K_COLOR)
+        end_cam_mm = pixel_to_camera_mm(u_end_d, v_end_d, depth, K_COLOR)
 
-        if wrist_cam_mm is None or finger_cam_mm is None:
+        if start_cam_mm is None or end_cam_mm is None:
             print(f"[SKIP] Invalid depth for {base}")
             continue
 
-        # Geo vector: wrist -> index (normalized)
-        geo_vec = finger_cam_mm - wrist_cam_mm
+        # Geo vector: start -> end (normalized)
+        geo_vec = end_cam_mm - start_cam_mm
         geo_norm = np.linalg.norm(geo_vec)
         if geo_norm < 1e-6:
             print(f"[SKIP] Zero-length geo vector for {base}")
@@ -255,17 +323,17 @@ def main(root_dir="val"):
         angle_rad = np.arccos(cos_val)
         angle_deg = float(np.degrees(angle_rad))
 
-        # Wrist point in meters for output
-        wrist_cam_m = wrist_cam_mm / 1000.0  # mm -> m
+        # Start point in meters for output (geo start)
+        start_cam_m = start_cam_mm / 1000.0  # mm -> m
 
-        # ---- Write geo_<name>.txt into geo_txt/ ----
+        # ---- Write geo_<name>.txt into pair-specific geo_txt/ ----
         with open(out_txt_path, "w") as f:
             # Line 1: 1
             f.write("1\n")
-            # Lines 2–4: wrist point (xyz_1) in meters (geo wrist)
-            f.write(f"{wrist_cam_m[0]:.6f}\n")
-            f.write(f"{wrist_cam_m[1]:.6f}\n")
-            f.write(f"{wrist_cam_m[2]:.6f}\n")
+            # Lines 2–4: start point (xyz_1) in meters (geo start joint)
+            f.write(f"{start_cam_m[0]:.6f}\n")
+            f.write(f"{start_cam_m[1]:.6f}\n")
+            f.write(f"{start_cam_m[2]:.6f}\n")
             # Lines 5–7: normalized geo vector (xyz_2)
             f.write(f"{geo_vec_normalized[0]:.6f}\n")
             f.write(f"{geo_vec_normalized[1]:.6f}\n")
@@ -274,22 +342,22 @@ def main(root_dir="val"):
             f.write(f"{angle_deg:.6f}\n")
 
         # ---- Visualization ----
-        # 1) Original wrist/index in image space
-        cv2.circle(bgr, (u_w, v_w), 5, (0, 255, 0), -1)   # wrist: green dot
-        cv2.circle(bgr, (u_i, v_i), 5, (0, 0, 255), -1)   # index: red dot
-        cv2.line(bgr, (u_w, v_w), (u_i, v_i), (255, 0, 0), 2)  # blue line: 2D wrist->index
+        # 1) 2D start/end joints in image space
+        cv2.circle(bgr, (u_start, v_start), 5, (0, 255, 0), -1)  # start: green dot
+        cv2.circle(bgr, (u_end, v_end), 5, (0, 0, 255), -1)      # end: red dot
+        cv2.line(bgr, (u_start, v_start), (u_end, v_end), (255, 0, 0), 2)  # blue line: 2D start->end
 
-        # 2) Geometric normalized vector (green) from geo wrist
+        # 2) Geometric normalized vector (green) from geo start
         GEO_LEN_MM = 300.0  # length of drawn ray
-        draw_vector_from_wrist_mm(
-            bgr, K_COLOR, wrist_cam_mm, geo_vec_normalized,
+        draw_vector_from_point_mm(
+            bgr, K_COLOR, start_cam_mm, geo_vec_normalized,
             length_mm=GEO_LEN_MM, color=(0, 255, 0), thickness=2
         )
 
         # 3) Original normalized vector (magenta) from original wrist
         #    Convert original wrist (meters) -> mm for projection
         orig_wrist_mm = orig_wrist_m * 1000.0
-        draw_vector_from_wrist_mm(
+        draw_vector_from_point_mm(
             bgr, K_COLOR, orig_wrist_mm, orig_vec_normalized,
             length_mm=GEO_LEN_MM, color=(255, 0, 255), thickness=2
         )
@@ -299,20 +367,50 @@ def main(root_dir="val"):
         print(f"[OK] {base}: wrote {out_txt_path} (angle={angle_deg:.2f} deg) "
               f"and {out_img_path}")
 
+    # After processing all files, compute average angular error for this joint pair.
+    avg, count = compute_average_angular_error(out_txt_dir)
+    avg_file_name = f"AVERAGE_{pair_tag}.txt"
+    avg_file_path = os.path.join(out_txt_dir, avg_file_name)
+
+    with open(avg_file_path, "w") as f:
+        if avg is None:
+            f.write("No valid 8th-line values found.\n")
+            print(f"[AVG] No valid 8th-line values found in {out_txt_dir}")
+        else:
+            f.write(f"Joint pair: {pair_tag}\n")
+            f.write(f"Used {count} file(s).\n")
+            f.write(f"Average angular error (deg): {avg:.6f}\n")
+            print(f"[AVG] Wrote {avg_file_path} (count={count}, avg={avg:.6f} deg)")
+
     pose.close()
 
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(
-        description="Generate geometric wrist->index vectors, compare to original, "
-                    "and draw both on images."
+        description=(
+            "Generate geometric vectors from chosen MediaPipe joints, compare to "
+            "original AprilTag vectors, draw both on images, and compute average "
+            "angular error for each joint pair."
+        )
     )
     parser.add_argument(
         "root",
         nargs="?",
         default="val",
-        help="Directory containing .jpg, .npy, and .txt pairs (default: ./val)",
+        help="Directory containing .jpg, .npy, and original .txt files (default: ./val)",
+    )
+    parser.add_argument(
+        "--start",
+        default="LEFT_WRIST",
+        help="MediaPipe PoseLandmark name for start joint "
+             "(e.g., LEFT_WRIST, LEFT_ELBOW, RIGHT_WRIST, ...)",
+    )
+    parser.add_argument(
+        "--end",
+        default="LEFT_INDEX",
+        help="MediaPipe PoseLandmark name for end joint "
+             "(e.g., LEFT_INDEX, LEFT_WRIST, RIGHT_INDEX, ...)",
     )
     args = parser.parse_args()
-    main(args.root)
+    main(args.root, start_joint_name=args.start, end_joint_name=args.end)
