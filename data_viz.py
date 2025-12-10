@@ -22,6 +22,7 @@ def get_2d_points(calib, wrist_coords, vec):
 if __name__ == "__main__":
 
 
+    os.makedirs("check_data", exist_ok=True)
     cfg = Config(
         color_resolution=ColorResolution.RES_1080P,       # 1920x1080
         depth_mode=DepthMode.NFOV_UNBINNED,               # 640x576 depth
@@ -32,6 +33,8 @@ if __name__ == "__main__":
     k4a.start()
     calib = k4a.calibration                    # pyk4a Calibration object (intrinsics+extrinsics)
     for file in os.listdir("data"):
+        
+        print(f"Processing {file}...")
         if not file.endswith(".txt"):
             continue
         txt_path = os.path.join("data", file)

@@ -29,8 +29,8 @@ X_MAX = 1920
 CONF_THRESHOLD = 0.0
 HALF_SIDE_M = 0.10  # same as your other file
 device = "cuda" if torch.cuda.is_available() else "cpu"
-state_dict = torch.load("ResNet50_augTrue_ampTrue_2025-11-30 20:49.pth", map_location="cpu")["model_state_dict"]
-model = models.resnet50()
+state_dict = torch.load("train/best_model.pth", map_location="cpu")["model_state_dict"]
+model = models.resnet18()
 model.fc = torch.nn.Linear(model.fc.in_features, 4)  # 1 for confidence + 3 for vector
 model.load_state_dict(state_dict, strict=True)
 model.to(device).eval()
@@ -81,6 +81,8 @@ while True:
         if result.pose_landmarks:
             landmarks = result.pose_landmarks.landmark
             left_wrist = landmarks[mp.solutions.pose.PoseLandmark.LEFT_WRIST]
+            left_finger = landmarks[mp.solutions.pose.PoseLandmark.LEFT_INDEX]
+            finger_x, finger_y = int(left_finger.x * rgb.shape[1]), int(left_finger.y * rgb.shape[0])
             # Coordinates are normalized (0–1 range)
             x,y = left_wrist.x, left_wrist.y
             x *= rgb.shape[1]
@@ -89,6 +91,7 @@ while True:
             rgb = cv2.circle(rgb, (x, y), radius=3, color=(0, 255, 0), thickness=-1)
             if x < X_MAX and x > 0 and y < Y_MAX and y > 0:
                 depth_point = depth_in_color[y,x]
+                depth_point_finger = depth_in_color[finger_y, finger_x]
                 if depth_point == 0:
                     continue
                 xmm, ymm, zmm = calib.convert_2d_to_3d((x, y), depth_point, 
@@ -97,9 +100,15 @@ while True:
                 ym = ymm / 1000
                 zm = zmm / 1000
                 wrist_mm = np.array([xmm, ymm, zmm])
-        
+
+                finger_xmm, finger_ymm, finger_zmm = calib.convert_2d_to_3d((finger_x, finger_y), depth_point_finger,
+                                                    CalibrationType.COLOR)
+                finger_mm = np.array([finger_xmm, finger_ymm, finger_zmm])
+                finger_mm = finger_mm - wrist_mm
+
+                finger_mm = finger_mm / np.linalg.norm(finger_mm)
                 with torch.no_grad():
-                    inp = preprocess_exact(color_bgra)         # (1,3,H,W) on CUDA
+                    inp = preprocess_exact(rgb).to(device)
                     out = model(inp)                           # (1,4)
                     conf = torch.sigmoid(out[:, :1]).item()    # scalar in [0,1]
                     vec = F.normalize(out[:, 1:], p=2, dim=1)[0].detach().cpu().numpy()  # (3,)
@@ -120,10 +129,11 @@ while True:
                     # convert to tag coordinates
 
                     if conf > CONF_THRESHOLD:
-                        end_mm = wrist_mm + vec * 300
+                        end_mm_pred = wrist_mm + vec * 300
+                        end_mm_finger = wrist_mm + finger_mm * 300
                         uv_wrist = calib.convert_3d_to_2d(tuple(wrist_mm.tolist()),
                                                         CalibrationType.COLOR, CalibrationType.COLOR)
-                        uv_end = calib.convert_3d_to_2d(tuple(end_mm.tolist()),
+                        uv_end = calib.convert_3d_to_2d(tuple(end_mm_pred.tolist()),
                                                         CalibrationType.COLOR, CalibrationType.COLOR)
                         if uv_wrist is not None and uv_end is not None:
                             p0 = tuple(map(int, uv_wrist))
@@ -131,10 +141,20 @@ while True:
                             cv2.line(rgb, p0, p1, (0, 255, 0), 2)
                             cv2.putText(rgb, f"conf={conf:.2f}", (p0[0]+6, p0[1]-6),
                                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (50, 255, 50), 1, cv2.LINE_AA)
-                        vx, vy, vz = vec
+                        
+                        uv_end_finger = calib.convert_3d_to_2d(tuple(end_mm_finger.tolist()),
+                                                        CalibrationType.COLOR, CalibrationType.COLOR)
+                        if uv_wrist is not None and uv_end_finger is not None:
+                            p0 = tuple(map(int, uv_wrist))
+                            p1 = tuple(map(int, uv_end_finger))
+                            cv2.line(rgb, p0, p1, (255, 0, 0), 2)
+                        
                         rotation_matrix = camera_to_world[:3, :3]
                         vec_world = rotation_matrix @ vec
                         vx, vy, vz = vec_world
+                        finger_world = rotation_matrix @ finger_mm
+                        vx_finger, vy_finger, vz_finger = finger_world
+
                         # avoid division by zero
                         if abs(vz) < 1e-6:
                             continue
@@ -143,20 +163,27 @@ while True:
                         x_intersect = x_w + vx * t
                         y_intersect = y_w + vy * t
 
-                        min_dist = float('inf')
-                        closest_id = -1
+                        t_finger = -z_w / vz_finger
+                        x_intersect_finger = x_w + vx_finger * t_finger
+                        y_intersect_finger = y_w + vy_finger * t_finger
+
+                        min_dist_pred = float('inf')
+                        min_dist_finger = float('inf')
+                        closest_id_pred = -1
+                        closest_id_finger = -1
                         for tag_id, matrix in transformation_map.items():
                             tag_x = matrix[0, 3]
                             tag_y = matrix[1, 3]
-                            dist = np.sqrt((x_intersect - tag_x)**2 + (y_intersect - tag_y)**2)
-                            if dist < min_dist:
-                                min_dist = dist
-                                closest_id = tag_id
-                        print(f"Pointing at tag ID: {closest_id} with distance {min_dist*HALF_SIDE_M*100:.2f} cm")
+                            dist_pred = np.sqrt((x_intersect - tag_x)**2 + (y_intersect - tag_y)**2)
+                            if dist_pred < min_dist_pred:
+                                min_dist_pred = dist_pred
+                                closest_id_pred = tag_id
+                            dist_finger = np.sqrt((x_intersect_finger - tag_x)**2 + (y_intersect_finger - tag_y)**2)
+                            if dist_finger < min_dist_finger:
+                                min_dist_finger = dist_finger
+                                closest_id_finger = tag_id
+                        print(f"Predicted ID: {closest_id_pred} with distance {min_dist_pred*HALF_SIDE_M*100:.2f} cm")
+                        print(f"Geometric ID: {closest_id_finger} with distance {min_dist_finger*HALF_SIDE_M*100:.2f} cm")
     cv2.imshow("frame", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
     if cv2.waitKey(1) == ord('q'):
         break
-            
-
-        
-
