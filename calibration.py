@@ -3,20 +3,39 @@ import cv2
 from find_tag import get_detections
 from pose_estimate import decompose_homography
 import json
+from pyk4a import PyK4A, Config, ColorResolution, DepthMode, FPS
+from pyk4a import CalibrationType
 
+if __name__
 cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
 cv2.namedWindow("Detected AprilTags", cv2.WINDOW_NORMAL)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+cfg = Config(
+    color_resolution=ColorResolution.RES_1080P,       # 1920x1080
+    depth_mode=DepthMode.NFOV_UNBINNED,               # 640x576 depth
+    synchronized_images_only=True,                     # depth+color in same capture
+    camera_fps= FPS.FPS_15
+)
+k4a = PyK4A(cfg)
+k4a.start()
+calib = k4a.calibration
 
 # Store dictionary transformation_map mapping april tag id : rigid transformation (from tag -> world frame)
 transformation_map = {}
 
 # Loop through every frame of the video (if doing individual images, we'd just continually loop while images are taken)
 while True:
-    ret, frame = cap.read()
-    if not ret:
-        break
+    # ret, frame = cap.read()
+    cap = k4a.get_capture()
+    color_bgra = cap.color                # (1080,1920,4) BGRA uint8
+    # if not ret:
+    #     print("test")
+    #     break
+    if color_bgra is None:
+        print("didn't work")
+        continue
+    frame = cv2.cvtColor(color_bgra, cv2.COLOR_BGRA2RGB)
     
     # Have dictionary of tag id : rigid transformation (tag -> camera) for all unknown tags
     unknown_map = {}
@@ -34,7 +53,7 @@ while True:
             corners = corners.astype(int)
             # Draw the corners (a polygon) using polylines
             rgb = cv2.polylines(rgb, [corners], isClosed=True, color=(0, 255, 0), thickness=2)
-    cv2.imshow("Detected AprilTags", rgb)
+    cv2.imshow("Detected AprilTags", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
 
     # Loop through all the detected tags
     key = cv2.waitKey(1) & 0xFF
@@ -81,8 +100,10 @@ while True:
                 # Save result in trasnformation_map
                 transformation_map[id] = unknown_to_world
 
-cap.release()
+# cap.release()
 
+cv2.destroyAllWindows()
+k4a.stop()
 
 
 

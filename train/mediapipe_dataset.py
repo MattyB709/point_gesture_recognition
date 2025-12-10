@@ -1,9 +1,8 @@
 """
-MediaPipe Joints Dataset with Azure Kinect Depth Support
+MediaPipe Joints Dataset with Failed Detection Filtering
 
-Two modes for 3D joint positions:
-1. MediaPipe world landmarks (estimated from RGB)
-2. MediaPipe 2D + Azure Kinect depth (more accurate)
+Now SKIPS samples where MediaPipe cannot detect a pose, rather than
+including them with all-zero joint coordinates.
 """
 
 import os
@@ -11,7 +10,7 @@ import numpy as np
 import cv2
 import torch
 from torch.utils.data import Dataset
-from typing import Tuple, Optional, Dict
+from typing import Tuple, Optional, Dict, List
 from pathlib import Path
 import mediapipe as mp
 import random
@@ -22,15 +21,13 @@ class MediaPipeJointsDataset(Dataset):
     """
     Dataset that extracts MediaPipe pose joints from images.
     
-    Can use either:
-    - MediaPipe's world landmarks (estimated depth)
-    - MediaPipe 2D + Azure Kinect depth (actual depth sensor)
+    Automatically filters out samples where pose detection fails.
     """
     
     def __init__(
         self, 
         data_dir: str, 
-        use_kinect_depth: bool = False,  # NEW: Use Azure Kinect depth instead of MediaPipe
+        use_kinect_depth: bool = False,
         include_visibility: bool = False,
         cache_joints: bool = True,
         cache_dir: Optional[str] = None,
@@ -39,51 +36,44 @@ class MediaPipeJointsDataset(Dataset):
         joint_noise_prob: float = 0.5,
         joint_noise_std: float = 0.01,
         horizontal_flip_prob: float = 0.5,
-        # Azure Kinect calibration (color camera, 1080p)
-        K: Optional[np.ndarray] = None,  # Camera intrinsics matrix 3x3
-        fx: Optional[float] = None,  # Focal length X (or use K)
-        fy: Optional[float] = None,  # Focal length Y (or use K)
-        cx: Optional[float] = None,  # Principal point X (or use K)
-        cy: Optional[float] = None,  # Principal point Y (or use K)
+        # Azure Kinect calibration
+        K: Optional[np.ndarray] = None,
+        fx: Optional[float] = None,
+        fy: Optional[float] = None,
+        cx: Optional[float] = None,
+        cy: Optional[float] = None,
+        # Detection filtering
+        skip_failed_detections: bool = True,  # NEW: Skip samples with no pose
+        min_visibility: float = 0.5,  # NEW: Minimum joint visibility
     ):
         """
         Args:
             data_dir: Path to directory containing .jpg, .npy, and .txt files
-            use_kinect_depth: If True, use Azure Kinect depth; if False, use MediaPipe world landmarks
-            include_visibility: Include visibility scores in features
-            cache_joints: Cache extracted joints to disk
-            cache_dir: Directory to save cached joints
-            augment: Whether to apply augmentation (set False for validation!)
-            joint_noise_prob: Probability of adding noise to joint positions
-            joint_noise_std: Standard deviation of noise
-            horizontal_flip_prob: Probability of horizontal flip
-            K: Camera intrinsics matrix (3x3). If provided, fx/fy/cx/cy are extracted from it.
-               Format: [[fx,  0, cx],
-                        [ 0, fy, cy],
-                        [ 0,  0,  1]]
-            fx, fy: Azure Kinect focal lengths (pixels) - ignored if K is provided
-            cx, cy: Azure Kinect principal point (pixels) - ignored if K is provided
+            use_kinect_depth: If True, use Azure Kinect depth
+            skip_failed_detections: If True, skip samples where pose detection fails
+            min_visibility: Minimum average visibility score (0-1) to keep sample
+            ... (other args same as before)
         """
         self.data_dir = data_dir
         self.use_kinect_depth = use_kinect_depth
         self.include_visibility = include_visibility
         self.cache_joints = cache_joints
         self.augment = augment
+        self.skip_failed_detections = skip_failed_detections
+        self.min_visibility = min_visibility
         
         # Augmentation settings
         self.joint_noise_prob = joint_noise_prob
         self.joint_noise_std = joint_noise_std
         self.horizontal_flip_prob = horizontal_flip_prob
         
-        # Azure Kinect calibration - extract from K matrix if provided
+        # Azure Kinect calibration
         if K is not None:
-            # Extract from K matrix
             self.fx = float(K[0, 0])
             self.fy = float(K[1, 1])
             self.cx = float(K[0, 2])
             self.cy = float(K[1, 2])
         else:
-            # Use individual parameters or defaults
             self.fx = fx if fx is not None else 1078.0
             self.fy = fy if fy is not None else 1078.0
             self.cx = cx if cx is not None else 960.0
@@ -106,8 +96,8 @@ class MediaPipeJointsDataset(Dataset):
             min_detection_confidence=0.5
         )
         
-        # Find all samples
-        self.samples = []
+        # Find all potential samples
+        potential_samples = []
         if os.path.exists(data_dir):
             for filename in os.listdir(data_dir):
                 if filename.endswith('.jpg'):
@@ -119,16 +109,23 @@ class MediaPipeJointsDataset(Dataset):
                         'label_path': os.path.join(data_dir, base_name + '.txt'),
                         'cache_path': os.path.join(cache_dir, base_name + '_joints.npy')
                     }
-                    # Only add if depth file exists (when using Kinect depth)
+                    # Check depth file exists if using Kinect
                     if use_kinect_depth:
                         if os.path.exists(sample['depth_path']):
-                            self.samples.append(sample)
+                            potential_samples.append(sample)
                     else:
-                        self.samples.append(sample)
+                        potential_samples.append(sample)
+        
+        # Filter out samples with failed pose detection
+        if skip_failed_detections:
+            self.samples = self._filter_valid_samples(potential_samples)
+            print(f"Filtered {len(potential_samples) - len(self.samples)} samples with failed pose detection")
+        else:
+            self.samples = potential_samples
         
         feature_dim = 99  # 33 joints × 3 coords
         if include_visibility:
-            feature_dim = 132  # 33 joints × 4 (x, y, z, visibility)
+            feature_dim = 132
         
         depth_mode = "Azure Kinect" if use_kinect_depth else "MediaPipe"
         aug_status = "ON" if augment else "OFF"
@@ -136,30 +133,81 @@ class MediaPipeJointsDataset(Dataset):
         print(f"  - Depth mode: {depth_mode}")
         print(f"  - Feature dimension: {feature_dim}")
         print(f"  - Caching: {cache_joints}")
+        print(f"  - Skip failed detections: {skip_failed_detections}")
         if use_kinect_depth:
             calib_source = "K matrix" if K is not None else "individual params"
             print(f"  - Calibration: {calib_source}")
             print(f"  - Intrinsics: fx={self.fx:.1f}, fy={self.fy:.1f}, cx={self.cx:.1f}, cy={self.cy:.1f}")
     
+    def _filter_valid_samples(self, potential_samples: List[dict]) -> List[dict]:
+        """
+        Filter samples to only keep those where pose detection succeeds.
+        
+        Returns:
+            List of valid samples (with detected poses)
+        """
+        print(f"Checking {len(potential_samples)} samples for valid pose detections...")
+        from tqdm import tqdm
+        
+        valid_samples = []
+        
+        for sample in tqdm(potential_samples, desc="Filtering samples"):
+            # Try to load from cache first
+            if self.cache_joints and os.path.exists(sample['cache_path']):
+                joints = np.load(sample['cache_path'])
+                # Check if it's all zeros (failed detection)
+                if np.allclose(joints, 0.0):
+                    continue  # Skip this sample
+                valid_samples.append(sample)
+            else:
+                # Extract joints and check if detection succeeded
+                try:
+                    if self.use_kinect_depth:
+                        joints = self._extract_joints_kinect(
+                            sample['image_path'],
+                            sample['depth_path'],
+                            check_only=True
+                        )
+                    else:
+                        joints = self._extract_joints_mediapipe(
+                            sample['image_path'],
+                            check_only=True
+                        )
+                    
+                    # If joints are not all zeros, pose was detected
+                    if joints is not None and not np.allclose(joints, 0.0):
+                        # Check average visibility if applicable
+                        if self.include_visibility:
+                            vis_scores = joints[3::4]  # Every 4th value is visibility
+                            avg_vis = np.mean(vis_scores)
+                            if avg_vis >= self.min_visibility:
+                                valid_samples.append(sample)
+                                # Cache it
+                                if self.cache_joints:
+                                    np.save(sample['cache_path'], joints)
+                        else:
+                            valid_samples.append(sample)
+                            # Cache it
+                            if self.cache_joints:
+                                np.save(sample['cache_path'], joints)
+                except Exception as e:
+                    print(f"Error processing {sample['image_path']}: {e}")
+                    continue
+        
+        return valid_samples
+    
     def __len__(self) -> int:
         return len(self.samples)
     
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, Dict]:
-        """
-        Returns:
-            joint_features: torch.Tensor of shape (feature_dim,)
-            label_dict: dict containing {
-                'is_pointing': int (0 or 1),
-                'pointing_vector': torch.Tensor (3,)
-            }
-        """
+        """Returns joint features and labels"""
         sample = self.samples[idx]
         
-        # Try to load from cache first
+        # Load from cache (we know it's valid if we got here)
         if self.cache_joints and os.path.exists(sample['cache_path']):
             joint_features = np.load(sample['cache_path'])
         else:
-            # Extract joints from image
+            # Extract joints
             if self.use_kinect_depth:
                 joint_features = self._extract_joints_kinect(
                     sample['image_path'], 
@@ -168,7 +216,7 @@ class MediaPipeJointsDataset(Dataset):
             else:
                 joint_features = self._extract_joints_mediapipe(sample['image_path'])
             
-            # Save to cache
+            # Cache it
             if self.cache_joints:
                 np.save(sample['cache_path'], joint_features)
         
@@ -180,95 +228,70 @@ class MediaPipeJointsDataset(Dataset):
         is_pointing = label_dict['is_pointing'] == 1
         direction = torch.from_numpy(label_dict['pointing_vector']).float()
         
-        # Apply augmentation (joints AND direction)
+        # Apply augmentation
         if self.augment:
             joints, direction = self._apply_augmentation(joints, direction, is_pointing)
         
-        # Update label dict
         label_dict['pointing_vector'] = direction
         
         return joints, label_dict
     
-    def _extract_joints_mediapipe(self, image_path: str) -> np.ndarray:
-        """Extract MediaPipe world landmarks (built-in depth estimation)"""
-        # Load image
+    def _extract_joints_mediapipe(self, image_path: str, check_only: bool = False) -> Optional[np.ndarray]:
+        """Extract MediaPipe world landmarks"""
         image = cv2.imread(image_path)
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         
-        # Process with MediaPipe
         results = self.pose.process(image_rgb)
         
-        # Extract world landmarks (3D coordinates)
         if results.pose_landmarks and results.pose_world_landmarks:
             landmarks = results.pose_world_landmarks.landmark
             
-            # Convert to numpy array
             joint_coords = []
             for lm in landmarks:
                 joint_coords.extend([lm.x, lm.y, lm.z])
                 if self.include_visibility:
-                    # Get visibility from regular landmarks
                     vis = results.pose_landmarks.landmark[len(joint_coords)//3 - 1].visibility
                     joint_coords.append(vis)
             
             return np.array(joint_coords, dtype=np.float32)
         else:
-            # If detection failed, return zeros
-            feature_dim = 132 if self.include_visibility else 99
-            print(f"Warning: No pose detected in {image_path}, using zeros")
-            return np.zeros(feature_dim, dtype=np.float32)
+            # Detection failed
+            if not check_only:
+                print(f"Warning: No pose detected in {image_path}")
+            return None  # Return None instead of zeros
     
-    def _extract_joints_kinect(self, image_path: str, depth_path: str) -> np.ndarray:
-        """
-        Extract joints using MediaPipe 2D + Azure Kinect depth.
-        
-        This matches your data collection method:
-        1. Get MediaPipe 2D landmarks
-        2. Look up depth at each joint position
-        3. Convert to 3D using camera intrinsics
-        """
-        # Load image and depth
+    def _extract_joints_kinect(self, image_path: str, depth_path: str, check_only: bool = False) -> Optional[np.ndarray]:
+        """Extract joints using MediaPipe 2D + Azure Kinect depth"""
         image = cv2.imread(image_path)
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        depth_mm = np.load(depth_path)  # (1080, 1920) uint16, millimeters
+        depth_mm = np.load(depth_path)
         
-        H, W = image_rgb.shape[:2]  # Should be 1080, 1920
+        H, W = image_rgb.shape[:2]
         
-        # Process with MediaPipe
         results = self.pose.process(image_rgb)
         
-        # Extract 2D landmarks and convert to 3D using depth
         if results.pose_landmarks:
             landmarks = results.pose_landmarks.landmark
             
             joint_coords = []
             for lm in landmarks:
-                # Convert normalized coords to pixels
                 x_px = int(lm.x * W)
                 y_px = int(lm.y * H)
                 
-                # Clamp to image bounds
                 x_px = max(0, min(W - 1, x_px))
                 y_px = max(0, min(H - 1, y_px))
                 
-                # Get depth at this pixel
                 depth_value = depth_mm[y_px, x_px]
                 
                 if depth_value > 0:
-                    # Convert 2D + depth to 3D using camera intrinsics
-                    # This matches the formula from your collection code:
-                    # xmm, ymm, zmm = calib.convert_2d_to_3d((x, y), depth_point, ...)
-                    
                     z_mm = float(depth_value)
                     x_mm = (x_px - self.cx) * z_mm / self.fx
                     y_mm = (y_px - self.cy) * z_mm / self.fy
                     
-                    # Convert to meters (same as your collection: xm = xmm / 1000)
                     x_m = x_mm / 1000.0
                     y_m = y_mm / 1000.0
                     z_m = z_mm / 1000.0
                 else:
-                    # No depth data, use zeros
                     x_m, y_m, z_m = 0.0, 0.0, 0.0
                 
                 joint_coords.extend([x_m, y_m, z_m])
@@ -278,37 +301,29 @@ class MediaPipeJointsDataset(Dataset):
             
             return np.array(joint_coords, dtype=np.float32)
         else:
-            # If detection failed, return zeros
-            feature_dim = 132 if self.include_visibility else 99
-            print(f"Warning: No pose detected in {image_path}, using zeros")
-            return np.zeros(feature_dim, dtype=np.float32)
+            # Detection failed
+            if not check_only:
+                print(f"Warning: No pose detected in {image_path}")
+            return None
     
     def _apply_augmentation(self, joints: torch.Tensor, direction: torch.Tensor, is_pointing: bool):
-        """
-        Apply augmentations to joints and direction.
-        Called within __getitem__, so DataLoader parallelizes this!
-        """
-        
-        # Reshape joints to (33, 3) or (33, 4) for easier manipulation
+        """Apply augmentations to joints and direction"""
         num_features_per_joint = 4 if self.include_visibility else 3
         joints_reshaped = joints.view(33, num_features_per_joint)
         
-        # Add noise to joint positions (first 3 coords: x, y, z)
+        # Add noise
         if random.random() < self.joint_noise_prob:
             noise = torch.randn_like(joints_reshaped[:, :3]) * self.joint_noise_std
             joints_reshaped[:, :3] = joints_reshaped[:, :3] + noise
         
-        # Horizontal flip (flip X coordinate of joints AND direction)
+        # Horizontal flip
         if random.random() < self.horizontal_flip_prob:
-            # Flip X coordinate (first dimension)
             joints_reshaped[:, 0] = -joints_reshaped[:, 0]
             
-            # Flip direction X component
             if is_pointing:
                 direction = direction.clone()
                 direction[0] = -direction[0]
         
-        # Flatten back to original shape
         joints = joints_reshaped.flatten()
         
         return joints, direction
@@ -320,12 +335,9 @@ class MediaPipeJointsDataset(Dataset):
         
         label = int(lines[0].strip())
         
-        result = {
-            'is_pointing': label
-        }
+        result = {'is_pointing': label}
         
         if label == 1 and len(lines) >= 7:
-            # Parse pointing vector (lines 4-6: dir_x, dir_y, dir_z)
             pointing_vector = np.array([
                 float(lines[4].strip()),
                 float(lines[5].strip()),
@@ -338,10 +350,7 @@ class MediaPipeJointsDataset(Dataset):
         return result
     
     def precompute_all_joints(self):
-        """
-        Precompute joints for all samples and save to cache.
-        Useful for speeding up training after first run.
-        """
+        """Precompute and cache all joints"""
         print(f"\nPrecomputing joints for {len(self.samples)} samples...")
         from tqdm import tqdm
         
@@ -355,21 +364,16 @@ class MediaPipeJointsDataset(Dataset):
                     )
                 else:
                     joint_features = self._extract_joints_mediapipe(sample['image_path'])
-                np.save(sample['cache_path'], joint_features)
+                
+                if joint_features is not None:
+                    np.save(sample['cache_path'], joint_features)
         
         print("✓ Joints precomputed and cached!")
 
 
 # Convenience functions
 def create_train_dataset(data_dir: str, use_kinect_depth: bool = False, K: Optional[np.ndarray] = None, **kwargs):
-    """Create training dataset WITH augmentation
-    
-    Args:
-        data_dir: Path to data directory
-        use_kinect_depth: Use Azure Kinect depth
-        K: Camera intrinsics matrix (3x3), optional
-        **kwargs: Additional arguments (fx, fy, cx, cy, etc.)
-    """
+    """Create training dataset WITH augmentation"""
     return MediaPipeJointsDataset(
         data_dir=data_dir,
         use_kinect_depth=use_kinect_depth,
@@ -377,19 +381,13 @@ def create_train_dataset(data_dir: str, use_kinect_depth: bool = False, K: Optio
         augment=True,
         include_visibility=False,
         cache_joints=True,
+        skip_failed_detections=True,  # Default: skip failed detections
         **kwargs
     )
 
 
 def create_val_dataset(data_dir: str, use_kinect_depth: bool = False, K: Optional[np.ndarray] = None, **kwargs):
-    """Create validation dataset WITHOUT augmentation
-    
-    Args:
-        data_dir: Path to data directory
-        use_kinect_depth: Use Azure Kinect depth
-        K: Camera intrinsics matrix (3x3), optional
-        **kwargs: Additional arguments (fx, fy, cx, cy, etc.)
-    """
+    """Create validation dataset WITHOUT augmentation"""
     return MediaPipeJointsDataset(
         data_dir=data_dir,
         use_kinect_depth=use_kinect_depth,
@@ -397,43 +395,22 @@ def create_val_dataset(data_dir: str, use_kinect_depth: bool = False, K: Optiona
         augment=False,
         include_visibility=False,
         cache_joints=True,
+        skip_failed_detections=True,  # Default: skip failed detections
         **kwargs
     )
 
 
 if __name__ == "__main__":
     print("="*70)
-    print("TESTING MEDIAPIPE JOINTS DATASET WITH KINECT DEPTH")
+    print("TESTING MEDIAPIPE DATASET WITH DETECTION FILTERING")
     print("="*70)
     
-    # Example camera intrinsics matrix
-    K = np.array([[919.76178, 0,        962.6875],
-                  [0,         919.8909,  550.9944],
-                  [0,         0,         1]], dtype=np.float64)
+    K = np.array([[919.76178, 0, 962.6875],
+                  [0, 919.8909, 550.9944],
+                  [0, 0, 1]], dtype=np.float64)
     
-    # Test both modes
-    print("\n1. Testing MediaPipe depth mode:")
-    print("-"*70)
-    train_mp = create_train_dataset("./split_data/train", use_kinect_depth=False)
-    val_mp = create_val_dataset("./split_data/val", use_kinect_depth=False)
+    # This will automatically filter out samples with no pose
+    train_dataset = create_train_dataset("./split_data/train", use_kinect_depth=True, K=K)
+    val_dataset = create_val_dataset("./split_data/val", use_kinect_depth=True, K=K)
     
-    print("\n2. Testing Azure Kinect depth mode with K matrix:")
-    print("-"*70)
-    train_kinect = create_train_dataset("./split_data/train", use_kinect_depth=True, K=K)
-    val_kinect = create_val_dataset("./split_data/val", use_kinect_depth=True, K=K)
-    
-    # Precompute
-    if len(train_kinect) > 0:
-        print("\nPrecomputing Kinect joints...")
-        train_kinect.precompute_all_joints()
-        val_kinect.precompute_all_joints()
-    
-    # Test loading
-    if len(train_kinect) > 0:
-        joints, labels = train_kinect[0]
-        print(f"\n✓ Sample loaded successfully:")
-        print(f"  - Joint features shape: {joints.shape}")
-        print(f"  - Is pointing: {labels['is_pointing']}")
-        print(f"  - Pointing vector: {labels['pointing_vector']}")
-        print(f"  - First 10 joint values: {joints[:10].numpy()}")
-        print(f"  - Joint value range: [{joints.min():.3f}, {joints.max():.3f}]")
+    print(f"\n✓ Valid samples: train={len(train_dataset)}, val={len(val_dataset)}")
