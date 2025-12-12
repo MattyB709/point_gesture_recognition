@@ -333,6 +333,16 @@ def create_model(model_name: str):
         model = create_joint_transformer()
     elif model_name == "mlp":
         model = create_simple_joint_mlp()
+    elif model_name == "SqueezeNet":
+        model = models.squeezenet1_1(weights=models.SqueezeNet1_1_Weights.DEFAULT)
+        model.classifier[1] = torch.nn.Conv2d(512, 4, kernel_size=1)
+        model.num_classes = 4
+    elif model_name == "EfficientNet_B0":  # Smallest
+        model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.DEFAULT)
+        model.classifier[1] = torch.nn.Linear(model.classifier[1].in_features, 4)
+    elif model_name == "MobileNetV3_Large":
+        model = models.mobilenet_v3_large(weights=models.MobileNet_V3_Large_Weights.DEFAULT)
+        model.classifier[3] = torch.nn.Linear(model.classifier[3].in_features, 4)
     else:
         raise Exception(f"Model name not found")
     return model
@@ -351,73 +361,47 @@ def create_pointing_transforms_v2(target_size=224):
             mean=[0.485, 0.456, 0.406],
             std=[0.229, 0.224, 0.225]
         ),
-    ])
-
-class ResizeWithPad:
-    """Custom transform that resizes maintaining aspect ratio and pads to square"""
-    def __init__(self, target_size=224):
-        self.target_size = target_size
-    
-    def __call__(self, img):
-        # img is PIL Image
-        w, h = img.size
-        
-        # Calculate new size maintaining aspect ratio
-        if w > h:
-            new_w = self.target_size
-            new_h = int(h * self.target_size / w)
-        else:
-            new_h = self.target_size
-            new_w = int(w * self.target_size / h)
-        
-        # Resize
-        img = transforms.functional.resize(img, (new_h, new_w), 
-                                          interpolation=transforms.InterpolationMode.BILINEAR)
-        
-        # Calculate padding
-        pad_left = (self.target_size - new_w) // 2
-        pad_right = self.target_size - new_w - pad_left
-        pad_top = (self.target_size - new_h) // 2
-        pad_bottom = self.target_size - new_h - pad_top
-        
-        # Apply padding
-        img = transforms.functional.pad(img, (pad_left, pad_top, pad_right, pad_bottom), 
-                                       fill=0, padding_mode='constant')
-        
-        return im101g
-
-# for param in model.parameters():
-        #     param.requires_grad = False
-def create_pointing_transforms_with_padding(target_size=224):
-    """
-    Better quality: Resize maintaining aspect ratio, then pad to square.
-    Use this if you want to preserve aspect ratio exactly.
-    """
-    return transforms.Compose([
-        ResizeWithPad(target_size=target_size),
-        transforms.ToTensor(),
-        transforms.Normalize(
-            mean=[0.485, 0.456, 0.406],
-            std=[0.229, 0.224, 0.225]
-        ),
-    ])
-
+    ]
+    )
 
 if __name__ == "__main__":
 
     # Example usage 
 
-    data_dir = "./split_data"
+    # data_dir = "./split_data"
+
+    # train_dataset = PointingDataset(data_dir + "/train", augment = True, normalize=True)
+    # val_dataset = PointingDataset(data_dir + "/val", augment = False, normalize=True)
+    # train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True, num_workers=4)
+    # val_loader = DataLoader(val_dataset, batch_size=8, shuffle=False, num_workers=4)
+
+    # model_name = "ResNet18"
+    # train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-4, device='cuda', use_wandb=True, use_amp=False, notes="old data", aux_name="old_data")
+    data_dir = "./split_data2"
 
     train_dataset = PointingDataset(data_dir + "/train", augment = True, normalize=True)
     val_dataset = PointingDataset(data_dir + "/val", augment = False, normalize=True)
-    train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_dataset, batch_size=8, shuffle=False, num_workers=4)
-
-    # model_name = "ResNet18"
-    # train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-4, device='cuda', use_wandb=True, use_amp=True, notes="Not pretrained")
     # train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True, num_workers=4)
     # val_loader = DataLoader(val_dataset, batch_size=8, shuffle=False, num_workers=4)
-    model_name = "ResNet50"
-    train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-5, device='cuda', use_wandb=True, use_amp=True, 
+
+    # model_name = "ResNet18"
+    # train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-4, device='cuda', use_wandb=True, use_amp=False, notes="old data", aux_name="old_data")
+    # train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True, num_workers=4)
+    # val_loader = DataLoader(val_dataset, batch_size=8, shuffle=False, num_workers=4)
+    # model_name = "ResNet50"
+    # train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-5, device='cuda', use_wandb=True, use_amp=False, 
+    #             notes="training with cleaned data", aux_name="clean_data")
+    # model_name = "ResNet18"
+    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=4)
+    val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False, num_workers=4)
+    # train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-5, device='cuda', use_wandb=True, use_amp=False, 
+    #             notes="training with cleaned data", aux_name="clean_data")
+    # model_name = "SqueezeNet"
+    # train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-5, device='cuda', use_wandb=True, use_amp=False, 
+    #             notes="training with cleaned data", aux_name="clean_data")
+    model_name = "EfficientNet_B0"
+    train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-5, device='cuda', use_wandb=True, use_amp=False, 
                 notes="training with cleaned data", aux_name="clean_data")
+    # model_name = "MobileNetV3_Large"
+    # train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-5, device='cuda', use_wandb=True, use_amp=False, 
+    #             notes="training with cleaned data", aux_name="clean_data")

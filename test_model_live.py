@@ -7,6 +7,61 @@ from pyk4a import PyK4A, Config, ColorResolution, DepthMode, FPS, CalibrationTyp
 import mediapipe as mp
 import time
 
+# function to create model from a set of prespecified names
+def create_model(model_name: str):
+    if model_name == "ResNet18":
+        model = models.resnet18(weights=None)
+        model.fc = torch.nn.Linear(model.fc.in_features, 4)  # 1 for confidence + 3 for vector
+    elif model_name == "ViT_B_16":
+        weights = models.ViT_B_16_Weights.DEFAULT
+        model = models.vit_b_16(weights=weights)
+
+        print("Freezing first 8 of 12 transformer blocks...")
+        for i, block in enumerate(model.encoder.layers):
+            if i < 8:
+                for param in block.parameters():
+                    param.requires_grad = False
+
+        model.heads.head = torch.nn.Sequential(
+            torch.nn.Dropout(0.5),  # ← Add this!
+            torch.nn.Linear(model.heads.head.in_features, 4)
+        )
+    elif model_name == "ResNet34":
+        model = models.resnet34(weights=models.ResNet34_Weights.DEFAULT)
+        model.fc = torch.nn.Linear(model.fc.in_features, 4)  # 1 for confidence + 3 for vector
+    elif model_name == "ResNet50":
+        model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+        model.fc = torch.nn.Linear(model.fc.in_features, 4)  # 1 for confidence + 3 for vector
+        # for param in model.parameters():
+        #     param.requires_grad = False
+        # model.fc = torch.nn.Sequential(
+        #     torch.nn.Dropout(0.5),  # ← Add this!
+        #     torch.nn.Linear(model.fc.in_features, 256),
+        #     torch.nn.Linear(256, 256),
+        #     torch.nn.Linear(256, 4),
+        # )
+        # model = create_resnet_frozen(model_name, 3, 0.5)
+    elif model_name == "ResNet101":
+        model = models.resnet101(weights=models.ResNet101_Weights.DEFAULT)
+        model.fc = torch.nn.Linear(model.fc.in_features, 4)  # 1 for confidence + 3 for vector
+    elif model_name == "joint_transformer":
+        model = create_joint_transformer()
+    elif model_name == "mlp":
+        model = create_simple_joint_mlp()
+    elif model_name == "SqueezeNet":
+        model = models.squeezenet1_1(weights=models.SqueezeNet1_1_Weights.DEFAULT)
+        model.classifier[1] = torch.nn.Conv2d(512, 4, kernel_size=1)
+        model.num_classes = 4
+    elif model_name == "EfficientNet_B0":  # Smallest
+        model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.DEFAULT)
+        model.classifier[1] = torch.nn.Linear(model.classifier[1].in_features, 4)
+    elif model_name == "MobileNetV3_Large":
+        model = models.mobilenet_v3_large(weights=models.MobileNet_V3_Large_Weights.DEFAULT)
+        model.classifier[3] = torch.nn.Linear(model.classifier[3].in_features, 4)
+    else:
+        raise Exception(f"Model name not found")
+    return model
+
 def create_resnet_frozen(model_name="ResNet50", freeze_until_layer=2, dropout=0.5):
     """
     Create ResNet with frozen layers and medium FC head.
@@ -53,7 +108,7 @@ def create_resnet_frozen(model_name="ResNet50", freeze_until_layer=2, dropout=0.
 # -------------------------
 # Model (load + CUDA + eval)
 # -------------------------
-CONF_THRESHOLD = 0.0
+CONF_THRESHOLD = 0.25
 device = "cuda" if torch.cuda.is_available() else "cpu"
 MEAN = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1).to(device)
 STD = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1).to(device)
@@ -80,9 +135,11 @@ if __name__ == "__main__":
     #     freeze_until_layer=2,  # Must match training
     #     dropout=0.5            # Must match training
     # )
-    model = models.resnet50()
-    model.fc = torch.nn.Linear(model.fc.in_features, 4)
-    state_dict = torch.load("trained_models/ResNet50_augTrue_ampTrue_2025-11-30 20:49.pth", map_location="cpu")["model_state_dict"]
+    # model = models.resnet50()
+    # model.fc = torch.nn.Linear(model.fc.in_features, 4)
+    # state_dict = torch.load("trained_models/ResNet50_augTrue_ampFalse_clean_data_2025-12-10 21:59.pth", map_location="cpu")["model_state_dict"]
+    model = create_model("SqueezeNet")
+    state_dict = torch.load("trained_models/SqueezeNet_augTrue_ampFalse_clean_data_2025-12-11 01:19.pth", map_location="cpu")["model_state_dict"]
     model.load_state_dict(state_dict, strict=True)
     model.to(device).eval()
     torch.backends.cudnn.benchmark = True
@@ -151,17 +208,20 @@ if __name__ == "__main__":
                 # Model forward (no normalization besides /255; no resize)
                 with torch.no_grad():
                     inp = preprocess_exact(color_bgra)         # (1,3,H,W) on CUDA
-                    with torch.autocast(device_type = 'cuda', dtype=torch.float16, enabled=True):
-                        out = model(inp)                           # (1,4)
+                    out = model(inp)                           # (1,4)
                     conf = torch.sigmoid(out[:, :1]).item()    # scalar in [0,1]
                     vec = F.normalize(out[:, 1:], p=2, dim=1)[0].detach().cpu().numpy()  # (3,)
 
                 if conf >= CONF_THRESHOLD:  # optional threshold
                     end_mm = wrist_mm + vec * SCALE_MM
-                    uv_wrist = calib.convert_3d_to_2d(tuple(wrist_mm.tolist()),
-                                                    CalibrationType.COLOR, CalibrationType.COLOR)
-                    uv_end = calib.convert_3d_to_2d(tuple(end_mm.tolist()),
-                                                    CalibrationType.COLOR, CalibrationType.COLOR)
+                    try:
+                        uv_wrist = calib.convert_3d_to_2d(tuple(wrist_mm.tolist()),
+                                                        CalibrationType.COLOR, CalibrationType.COLOR)
+                        uv_end = calib.convert_3d_to_2d(tuple(end_mm.tolist()),
+                                                        CalibrationType.COLOR, CalibrationType.COLOR)
+                    except:
+                        print("fail to convert 3d to 2d")
+                        continue
                     if uv_wrist is not None and uv_end is not None:
                         p0 = tuple(map(int, uv_wrist))
                         p1 = tuple(map(int, uv_end))

@@ -31,11 +31,16 @@ class MediaPipeJointsDataset(Dataset):
         include_visibility: bool = False,
         cache_joints: bool = True,
         cache_dir: Optional[str] = None,
-        augment: bool = True,
+        augment: bool = False,
+        normalize: bool = True,
         # Augmentation parameters
         joint_noise_prob: float = 0.5,
         joint_noise_std: float = 0.01,
         horizontal_flip_prob: float = 0.5,
+        rotation_prob: float = 0.3,
+        max_rotation_degrees: float = 15.0,
+        scale_prob: float = 0.3,
+        scale_range: Tuple[float, float] = (0.9, 1.1),
         # Azure Kinect calibration
         K: Optional[np.ndarray] = None,
         fx: Optional[float] = None,
@@ -43,22 +48,36 @@ class MediaPipeJointsDataset(Dataset):
         cx: Optional[float] = None,
         cy: Optional[float] = None,
         # Detection filtering
-        skip_failed_detections: bool = True,  # NEW: Skip samples with no pose
-        min_visibility: float = 0.5,  # NEW: Minimum joint visibility
+        skip_failed_detections: bool = True,
+        min_visibility: float = 0.5,
     ):
         """
         Args:
             data_dir: Path to directory containing .jpg, .npy, and .txt files
             use_kinect_depth: If True, use Azure Kinect depth
+            include_visibility: If True, include visibility scores in features
+            cache_joints: If True, cache extracted joints to disk
+            cache_dir: Directory to store cached joints
+            augment: If True, apply augmentations during training
+            normalize: If True, normalize joint coordinates
+            joint_noise_prob: Probability of adding noise to joints
+            joint_noise_std: Standard deviation of Gaussian noise
+            horizontal_flip_prob: Probability of horizontal flip
+            rotation_prob: Probability of rotation augmentation
+            max_rotation_degrees: Maximum rotation angle in degrees
+            scale_prob: Probability of scale augmentation
+            scale_range: Range of scale factors (min, max)
+            K: Camera intrinsic matrix (3x3)
+            fx, fy, cx, cy: Individual camera intrinsic parameters
             skip_failed_detections: If True, skip samples where pose detection fails
             min_visibility: Minimum average visibility score (0-1) to keep sample
-            ... (other args same as before)
         """
         self.data_dir = data_dir
         self.use_kinect_depth = use_kinect_depth
         self.include_visibility = include_visibility
         self.cache_joints = cache_joints
         self.augment = augment
+        self.normalize = normalize
         self.skip_failed_detections = skip_failed_detections
         self.min_visibility = min_visibility
         
@@ -66,6 +85,10 @@ class MediaPipeJointsDataset(Dataset):
         self.joint_noise_prob = joint_noise_prob
         self.joint_noise_std = joint_noise_std
         self.horizontal_flip_prob = horizontal_flip_prob
+        self.rotation_prob = rotation_prob
+        self.max_rotation_degrees = max_rotation_degrees
+        self.scale_prob = scale_prob
+        self.scale_range = scale_range
         
         # Azure Kinect calibration
         if K is not None:
@@ -123,21 +146,71 @@ class MediaPipeJointsDataset(Dataset):
         else:
             self.samples = potential_samples
         
+        # Feature dimension
         feature_dim = 99  # 33 joints × 3 coords
         if include_visibility:
-            feature_dim = 132
+            feature_dim = 132  # 33 joints × 4 (x, y, z, visibility)
         
+        # Print dataset info
         depth_mode = "Azure Kinect" if use_kinect_depth else "MediaPipe"
         aug_status = "ON" if augment else "OFF"
-        print(f"MediaPipe Joints Dataset: {len(self.samples)} samples, augmentation {aug_status}")
+        print(f"Found {len(self.samples)} samples in {data_dir}, augmentations: {aug_status}")
         print(f"  - Depth mode: {depth_mode}")
         print(f"  - Feature dimension: {feature_dim}")
         print(f"  - Caching: {cache_joints}")
+        print(f"  - Normalization: {normalize}")
         print(f"  - Skip failed detections: {skip_failed_detections}")
         if use_kinect_depth:
             calib_source = "K matrix" if K is not None else "individual params"
             print(f"  - Calibration: {calib_source}")
             print(f"  - Intrinsics: fx={self.fx:.1f}, fy={self.fy:.1f}, cx={self.cx:.1f}, cy={self.cy:.1f}")
+    
+    def __len__(self) -> int:
+        return len(self.samples)
+    
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, Dict]:
+        """Returns joint features and labels"""
+        sample = self.samples[idx]
+        
+        # Load from cache (we know it's valid if we got here)
+        if self.cache_joints and os.path.exists(sample['cache_path']):
+            joint_features = np.load(sample['cache_path'])
+        else:
+            # Extract joints
+            if self.use_kinect_depth:
+                joint_features = self._extract_joints_kinect(
+                    sample['image_path'], 
+                    sample['depth_path']
+                )
+            else:
+                joint_features = self._extract_joints_mediapipe(sample['image_path'])
+            
+            # Cache it
+            if self.cache_joints:
+                np.save(sample['cache_path'], joint_features)
+        
+        # Load labels
+        label_dict = self._load_label(sample['label_path'])
+        
+        # Convert to torch tensors
+        joints = torch.from_numpy(joint_features).float()
+        is_pointing = label_dict['is_pointing'] == 1
+        direction = torch.from_numpy(label_dict['pointing_vector']).float()
+        
+        # Apply augmentation (joints AND direction)
+        if self.augment:
+            joints, direction = self._apply_augmentation(joints, direction, is_pointing)
+        
+        # Normalize joints
+        if self.normalize:
+            joints = self._normalize_joints(joints)
+        
+        # Update label dict with augmented direction
+        label_dict['pointing_vector'] = direction
+        if label_dict['wrist_coords'] is not None:
+            label_dict['wrist_coords'] = torch.from_numpy(label_dict['wrist_coords']).float()
+        
+        return joints, label_dict
     
     def _filter_valid_samples(self, potential_samples: List[dict]) -> List[dict]:
         """
@@ -196,46 +269,6 @@ class MediaPipeJointsDataset(Dataset):
         
         return valid_samples
     
-    def __len__(self) -> int:
-        return len(self.samples)
-    
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, Dict]:
-        """Returns joint features and labels"""
-        sample = self.samples[idx]
-        
-        # Load from cache (we know it's valid if we got here)
-        if self.cache_joints and os.path.exists(sample['cache_path']):
-            joint_features = np.load(sample['cache_path'])
-        else:
-            # Extract joints
-            if self.use_kinect_depth:
-                joint_features = self._extract_joints_kinect(
-                    sample['image_path'], 
-                    sample['depth_path']
-                )
-            else:
-                joint_features = self._extract_joints_mediapipe(sample['image_path'])
-            
-            # Cache it
-            if self.cache_joints:
-                np.save(sample['cache_path'], joint_features)
-        
-        # Load labels
-        label_dict = self._load_label(sample['label_path'])
-        
-        # Convert to torch tensors
-        joints = torch.from_numpy(joint_features).float()
-        is_pointing = label_dict['is_pointing'] == 1
-        direction = torch.from_numpy(label_dict['pointing_vector']).float()
-        
-        # Apply augmentation
-        if self.augment:
-            joints, direction = self._apply_augmentation(joints, direction, is_pointing)
-        
-        label_dict['pointing_vector'] = direction
-        
-        return joints, label_dict
-    
     def _extract_joints_mediapipe(self, image_path: str, check_only: bool = False) -> Optional[np.ndarray]:
         """Extract MediaPipe world landmarks"""
         image = cv2.imread(image_path)
@@ -247,10 +280,10 @@ class MediaPipeJointsDataset(Dataset):
             landmarks = results.pose_world_landmarks.landmark
             
             joint_coords = []
-            for lm in landmarks:
+            for i, lm in enumerate(landmarks):
                 joint_coords.extend([lm.x, lm.y, lm.z])
                 if self.include_visibility:
-                    vis = results.pose_landmarks.landmark[len(joint_coords)//3 - 1].visibility
+                    vis = results.pose_landmarks.landmark[i].visibility
                     joint_coords.append(vis)
             
             return np.array(joint_coords, dtype=np.float32)
@@ -258,7 +291,7 @@ class MediaPipeJointsDataset(Dataset):
             # Detection failed
             if not check_only:
                 print(f"Warning: No pose detected in {image_path}")
-            return None  # Return None instead of zeros
+            return None
     
     def _extract_joints_kinect(self, image_path: str, depth_path: str, check_only: bool = False) -> Optional[np.ndarray]:
         """Extract joints using MediaPipe 2D + Azure Kinect depth"""
@@ -307,26 +340,103 @@ class MediaPipeJointsDataset(Dataset):
             return None
     
     def _apply_augmentation(self, joints: torch.Tensor, direction: torch.Tensor, is_pointing: bool):
-        """Apply augmentations to joints and direction"""
+        """
+        Apply augmentations to joints and direction.
+        Called within __getitem__, so DataLoader parallelizes this!
+        """
         num_features_per_joint = 4 if self.include_visibility else 3
         joints_reshaped = joints.view(33, num_features_per_joint)
         
-        # Add noise
+        # =====================================================================
+        # JOINT-SPECIFIC AUGMENTATIONS
+        # =====================================================================
+        
+        # Add Gaussian noise to joint positions
         if random.random() < self.joint_noise_prob:
             noise = torch.randn_like(joints_reshaped[:, :3]) * self.joint_noise_std
             joints_reshaped[:, :3] = joints_reshaped[:, :3] + noise
         
+        # =====================================================================
+        # GEOMETRIC AUGMENTATIONS (must transform direction too!)
+        # =====================================================================
+        
         # Horizontal flip
         if random.random() < self.horizontal_flip_prob:
-            joints_reshaped[:, 0] = -joints_reshaped[:, 0]
+            joints_reshaped[:, 0] = -joints_reshaped[:, 0]  # Flip X coordinate
             
             if is_pointing:
                 direction = direction.clone()
-                direction[0] = -direction[0]
+                direction[0] = -direction[0]  # Flip X component
+        
+        # Rotation around Z-axis (camera optical axis)
+        if random.random() < self.rotation_prob:
+            angle = random.uniform(-self.max_rotation_degrees, self.max_rotation_degrees)
+            joints_reshaped[:, :3] = self._rotate_joints_z(joints_reshaped[:, :3], angle)
+            
+            if is_pointing:
+                direction = self._rotate_direction_z(direction, angle)
+        
+        # Scale (uniform scaling of joint positions)
+        if random.random() < self.scale_prob:
+            scale_factor = random.uniform(*self.scale_range)
+            joints_reshaped[:, :3] = joints_reshaped[:, :3] * scale_factor
         
         joints = joints_reshaped.flatten()
         
         return joints, direction
+    
+    def _rotate_joints_z(self, joints: torch.Tensor, angle_degrees: float) -> torch.Tensor:
+        """Rotate joint coordinates around Z-axis (camera optical axis)"""
+        angle_rad = math.radians(angle_degrees)
+        cos_a = math.cos(angle_rad)
+        sin_a = math.sin(angle_rad)
+        
+        # Rotation matrix for Z-axis
+        # [cos -sin 0]
+        # [sin  cos 0]
+        # [0    0   1]
+        
+        x = joints[:, 0]
+        y = joints[:, 1]
+        z = joints[:, 2]
+        
+        new_x = x * cos_a - y * sin_a
+        new_y = x * sin_a + y * cos_a
+        new_z = z
+        
+        return torch.stack([new_x, new_y, new_z], dim=1)
+    
+    def _rotate_direction_z(self, direction: torch.Tensor, angle_degrees: float) -> torch.Tensor:
+        """Rotate direction vector around Z-axis (camera optical axis)"""
+        angle_rad = math.radians(angle_degrees)
+        cos_a = math.cos(angle_rad)
+        sin_a = math.sin(angle_rad)
+        
+        x, y, z = direction[0].item(), direction[1].item(), direction[2].item()
+        
+        new_x = x * cos_a - y * sin_a
+        new_y = x * sin_a + y * cos_a
+        new_z = z
+        
+        return torch.tensor([new_x, new_y, new_z], dtype=direction.dtype)
+    
+    def _normalize_joints(self, joints: torch.Tensor) -> torch.Tensor:
+        """
+        Normalize joint coordinates.
+        Can implement different normalization strategies here.
+        """
+        # Simple standardization: subtract mean and divide by std
+        # Note: This is per-sample normalization
+        num_features_per_joint = 4 if self.include_visibility else 3
+        joints_reshaped = joints.view(33, num_features_per_joint)
+        
+        # Normalize XYZ coordinates only (not visibility)
+        xyz = joints_reshaped[:, :3]
+        mean = xyz.mean(dim=0, keepdim=True)
+        std = xyz.std(dim=0, keepdim=True) + 1e-8  # Avoid division by zero
+        joints_reshaped[:, :3] = (xyz - mean) / std
+        
+        return joints_reshaped.flatten()
     
     def _load_label(self, label_path: str) -> dict:
         """Load label from .txt file"""
@@ -338,13 +448,20 @@ class MediaPipeJointsDataset(Dataset):
         result = {'is_pointing': label}
         
         if label == 1 and len(lines) >= 7:
+            wrist_coords = np.array([
+                float(lines[1].strip()),
+                float(lines[2].strip()),
+                float(lines[3].strip())
+            ])
             pointing_vector = np.array([
                 float(lines[4].strip()),
                 float(lines[5].strip()),
                 float(lines[6].strip())
             ])
+            result['wrist_coords'] = wrist_coords
             result['pointing_vector'] = pointing_vector
         else:
+            result['wrist_coords'] = None
             result['pointing_vector'] = np.array([0.0, 0.0, 0.0])
         
         return result
@@ -379,9 +496,10 @@ def create_train_dataset(data_dir: str, use_kinect_depth: bool = False, K: Optio
         use_kinect_depth=use_kinect_depth,
         K=K,
         augment=True,
+        normalize=True,
         include_visibility=False,
         cache_joints=True,
-        skip_failed_detections=True,  # Default: skip failed detections
+        skip_failed_detections=True,
         **kwargs
     )
 
@@ -393,9 +511,10 @@ def create_val_dataset(data_dir: str, use_kinect_depth: bool = False, K: Optiona
         use_kinect_depth=use_kinect_depth,
         K=K,
         augment=False,
+        normalize=True,
         include_visibility=False,
         cache_joints=True,
-        skip_failed_detections=True,  # Default: skip failed detections
+        skip_failed_detections=True,
         **kwargs
     )
 
