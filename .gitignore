@@ -8,3 +8,5 @@ wandb/
 *.pth
 check_data/
 grid_data/
+check_data/
+*.zip

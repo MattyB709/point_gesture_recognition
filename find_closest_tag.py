@@ -29,8 +29,8 @@ X_MAX = 1920
 CONF_THRESHOLD = 0.0
 HALF_SIDE_M = 0.10  # same as your other file
 device = "cuda" if torch.cuda.is_available() else "cpu"
-state_dict = torch.load("train/best_model.pth", map_location="cpu")["model_state_dict"]
-model = models.resnet18()
+state_dict = torch.load("trained_models/ResNet50_augTrue_ampTrue_2025-11-30 20:49.pth", map_location="cpu")["model_state_dict"]
+model = models.resnet50()
 model.fc = torch.nn.Linear(model.fc.in_features, 4)  # 1 for confidence + 3 for vector
 model.load_state_dict(state_dict, strict=True)
 model.to(device).eval()
@@ -65,6 +65,10 @@ mp_pose = mp.solutions.pose
 pose = mp_pose.Pose()
 
 while True:
+    min_dist_pred = None
+    min_dist_finger = None
+    closest_id_finger = None
+    closest_id_pred = None
     cap = k4a.get_capture()          # blocking
     color_bgra = cap.color                # numpy uint8, shape (1080,1920,4) BGRA
     depth = cap.depth                # numpy uint16, shape (576,640), units = millimeters
@@ -94,15 +98,21 @@ while True:
                 depth_point_finger = depth_in_color[finger_y, finger_x]
                 if depth_point == 0:
                     continue
-                xmm, ymm, zmm = calib.convert_2d_to_3d((x, y), depth_point, 
-                                                    CalibrationType.COLOR)
+                try: 
+                    xmm, ymm, zmm = calib.convert_2d_to_3d((x, y), depth_point, 
+                                                        CalibrationType.COLOR)
+                except:
+                    continue
                 xm = xmm / 1000
                 ym = ymm / 1000
                 zm = zmm / 1000
                 wrist_mm = np.array([xmm, ymm, zmm])
 
-                finger_xmm, finger_ymm, finger_zmm = calib.convert_2d_to_3d((finger_x, finger_y), depth_point_finger,
+                try:
+                    finger_xmm, finger_ymm, finger_zmm = calib.convert_2d_to_3d((finger_x, finger_y), depth_point_finger,
                                                     CalibrationType.COLOR)
+                except:
+                    continue
                 finger_mm = np.array([finger_xmm, finger_ymm, finger_zmm])
                 finger_mm = finger_mm - wrist_mm
 
@@ -131,10 +141,13 @@ while True:
                     if conf > CONF_THRESHOLD:
                         end_mm_pred = wrist_mm + vec * 300
                         end_mm_finger = wrist_mm + finger_mm * 300
-                        uv_wrist = calib.convert_3d_to_2d(tuple(wrist_mm.tolist()),
-                                                        CalibrationType.COLOR, CalibrationType.COLOR)
-                        uv_end = calib.convert_3d_to_2d(tuple(end_mm_pred.tolist()),
-                                                        CalibrationType.COLOR, CalibrationType.COLOR)
+                        try: 
+                            uv_wrist = calib.convert_3d_to_2d(tuple(wrist_mm.tolist()),
+                                                            CalibrationType.COLOR, CalibrationType.COLOR)
+                            uv_end = calib.convert_3d_to_2d(tuple(end_mm_pred.tolist()),
+                                                            CalibrationType.COLOR, CalibrationType.COLOR)
+                        except:
+                            continue
                         if uv_wrist is not None and uv_end is not None:
                             p0 = tuple(map(int, uv_wrist))
                             p1 = tuple(map(int, uv_end))
@@ -142,8 +155,11 @@ while True:
                             cv2.putText(rgb, f"conf={conf:.2f}", (p0[0]+6, p0[1]-6),
                                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (50, 255, 50), 1, cv2.LINE_AA)
                         
-                        uv_end_finger = calib.convert_3d_to_2d(tuple(end_mm_finger.tolist()),
+                        try:
+                            uv_end_finger = calib.convert_3d_to_2d(tuple(end_mm_finger.tolist()),
                                                         CalibrationType.COLOR, CalibrationType.COLOR)
+                        except:
+                            continue
                         if uv_wrist is not None and uv_end_finger is not None:
                             p0 = tuple(map(int, uv_wrist))
                             p1 = tuple(map(int, uv_end_finger))
@@ -184,6 +200,15 @@ while True:
                                 closest_id_finger = tag_id
                         print(f"Predicted ID: {closest_id_pred} with distance {min_dist_pred*HALF_SIDE_M*100:.2f} cm")
                         print(f"Geometric ID: {closest_id_finger} with distance {min_dist_finger*HALF_SIDE_M*100:.2f} cm")
+
     cv2.imshow("frame", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+    key = cv2.waitKey(1)
+    if key == ord('q'):
+        break
+    if key == ord('t'):
+        if min_dist_pred is not None and min_dist_finger is not None:
+            pointed_to_id = closest_id_pred
+            print(f"Predicted ID: {closest_id_pred} with distance {min_dist_pred*HALF_SIDE_M*100:.2f} cm")
+            print(f"Geometric ID: {closest_id_finger} with distance {min_dist_finger*HALF_SIDE_M*100:.2f} cm")
     if cv2.waitKey(1) == ord('q'):
         break

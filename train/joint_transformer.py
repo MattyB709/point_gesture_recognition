@@ -194,7 +194,10 @@ class JointTransformer(nn.Module):
         confidence = self.conf_head(pooled)  # (batch, 1)
         direction = self.dir_head(pooled)  # (batch, 3)
         
-        return confidence, direction
+        # Concatenate to match ResNet output format
+        outputs = torch.cat([confidence, direction], dim=1)  # (batch, 4)
+        
+        return outputs
 
 
 class SimpleJointMLP(nn.Module):
@@ -258,10 +261,13 @@ class SimpleJointMLP(nn.Module):
         features = self.feature_extractor(x)
         
         # Output heads
-        confidence = self.conf_head(features)
-        direction = self.dir_head(features)
+        confidence = self.conf_head(features)  # (batch, 1)
+        direction = self.dir_head(features)  # (batch, 3)
         
-        return confidence, direction
+        # Concatenate to match ResNet output format
+        outputs = torch.cat([confidence, direction], dim=1)  # (batch, 4)
+        
+        return outputs
 
 
 # Factory functions
@@ -321,11 +327,14 @@ if __name__ == "__main__":
     )
     
     with torch.no_grad():
-        conf, direction = model_transformer(x)
+        outputs = model_transformer(x)
+        pred_conf = outputs[:, :1]
+        pred_dir = outputs[:, 1:]
     
     print(f"\n✓ Output shapes:")
-    print(f"  - Confidence: {conf.shape}")
-    print(f"  - Direction: {direction.shape}")
+    print(f"  - Outputs: {outputs.shape}")
+    print(f"  - Confidence: {pred_conf.shape}")
+    print(f"  - Direction: {pred_dir.shape}")
     
     # Test MLP
     print("\n2. Testing Simple MLP:")
@@ -336,11 +345,14 @@ if __name__ == "__main__":
     )
     
     with torch.no_grad():
-        conf, direction = model_mlp(x)
+        outputs = model_mlp(x)
+        pred_conf = outputs[:, :1]
+        pred_dir = outputs[:, 1:]
     
     print(f"\n✓ Output shapes:")
-    print(f"  - Confidence: {conf.shape}")
-    print(f"  - Direction: {direction.shape}")
+    print(f"  - Outputs: {outputs.shape}")
+    print(f"  - Confidence: {pred_conf.shape}")
+    print(f"  - Direction: {pred_dir.shape}")
     
     print("\n" + "="*70)
     print("ALL TESTS PASSED!")
