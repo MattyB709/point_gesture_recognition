@@ -13,13 +13,13 @@ class AngularLoss(nn.Module):
         super(AngularLoss, self).__init__()
         self.alpha = alpha
         self.beta = beta
-        self.bce_loss = nn.BCEWithLogitsLoss()
+        self.bce_loss = nn.BCELoss()
         self.mse_loss = nn.MSELoss()
         self.use_pos = use_pos
 
     def forward(self, pred_confidence, pred_vector, true_confidence, true_vector):
         # Classification loss
-        # pred_confidence = torch.sigmoid(pred_confidence)
+        pred_confidence = torch.sigmoid(pred_confidence)
         conf_loss = self.bce_loss(pred_confidence, true_confidence)
 
         # Only compute vector loss for pointing samples
