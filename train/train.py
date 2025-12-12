@@ -361,8 +361,9 @@ def create_pointing_transforms_v2(target_size=224):
             mean=[0.485, 0.456, 0.406],
             std=[0.229, 0.224, 0.225]
         ),
-    ]
-    )
+    ])
+    
+    
 
 if __name__ == "__main__":
 
@@ -377,31 +378,30 @@ if __name__ == "__main__":
 
     # model_name = "ResNet18"
     # train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-4, device='cuda', use_wandb=True, use_amp=False, notes="old data", aux_name="old_data")
-    data_dir = "./split_data2"
+    data_dir = "./split_data"
 
     train_dataset = PointingDataset(data_dir + "/train", augment = True, normalize=True)
     val_dataset = PointingDataset(data_dir + "/val", augment = False, normalize=True)
-    # train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True, num_workers=4)
-    # val_loader = DataLoader(val_dataset, batch_size=8, shuffle=False, num_workers=4)
+    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=4)
+    val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False, num_workers=4)
 
-    # model_name = "ResNet18"
-    # train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-4, device='cuda', use_wandb=True, use_amp=False, notes="old data", aux_name="old_data")
+    model_name = "ResNet18"
+    train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-4, device='cuda', use_wandb=True, use_amp=False, notes="back to horizontal flip", aux_name="h_flip")
     # train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True, num_workers=4)
     # val_loader = DataLoader(val_dataset, batch_size=8, shuffle=False, num_workers=4)
     # model_name = "ResNet50"
     # train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-5, device='cuda', use_wandb=True, use_amp=False, 
     #             notes="training with cleaned data", aux_name="clean_data")
     # model_name = "ResNet18"
-    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False, num_workers=4)
     # train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-5, device='cuda', use_wandb=True, use_amp=False, 
     #             notes="training with cleaned data", aux_name="clean_data")
     # model_name = "SqueezeNet"
     # train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-5, device='cuda', use_wandb=True, use_amp=False, 
     #             notes="training with cleaned data", aux_name="clean_data")
-    model_name = "EfficientNet_B0"
-    train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-5, device='cuda', use_wandb=True, use_amp=False, 
-                notes="training with cleaned data", aux_name="clean_data")
+    # model_name = "EfficientNet_B0"
+    # train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-5, device='cuda', use_wandb=True, use_amp=False, 
+    #             notes="training with cleaned data", aux_name="clean_data")
     # model_name = "MobileNetV3_Large"
     # train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-5, device='cuda', use_wandb=True, use_amp=False, 
     #             notes="training with cleaned data", aux_name="clean_data")
+    

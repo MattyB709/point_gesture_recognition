@@ -194,11 +194,11 @@ class PointingDataset(Dataset):
         # =====================================================================
         
         # Horizontal flip
-        # if random.random() < self.horizontal_flip_prob:
-        #     image = TF.hflip(image)
-        #     if is_pointing:
-        #         direction = direction.clone()
-        #         direction[0] = -direction[0]  # Flip X component
+        if random.random() < self.horizontal_flip_prob:
+            image = TF.hflip(image)
+            if is_pointing:
+                direction = direction.clone()
+                direction[0] = -direction[0]  # Flip X component
         
         # Rotation
         # if random.random() < self.rotation_prob:
@@ -260,22 +260,22 @@ def split_pointing_data(data_dir, output_dir, train_ratio=0.7,
     """Split your data into train/val/test"""
 
     # Find samples
-    # bad_samples = ["10-16-161557", "10-16-161637", "10-16-162111", "10-16-165404", "10-28-174720", "10-28-175646",
-    #                 "11-06-170347", "10-28-180513", "10-28-182538", "10-28-183215", "10-28-183646",
-    #                 "10-28-185129", "10-28-191518", "10-28-191544", "10-28-191557", "11-04-164347",
-    #                 "11-04-164812", "11-06-163442", "11-06-163708", "11-06-163805", "11-06-164033",
-    #                 "11-06-170347" "11-06-181526", "11-11-165448", "11-11-170109", 
-    #                 "11-06-170426", "11-06-170921", "11-06-171808", "11-06-171956",
-    #                 "11-06-180212", "11-06-181423", "11-11-163407", "11-11-164209", "11-11-164347", "11-11-165140",
-    #                 "11-18-161216", "11-18-161218", "11-18-161258", "11-18-161658", "11-18-161746","11-18-162038",
-    #                 "11-18-162046","11-18-162051","11-18-162158","11-18-162332","11-18-162453", "11-18-162525","11-18-163002",
-    #                 "11-18-163004","11-18-163132","11-18-163841" ]
+    bad_samples = ["10-16-161557", "10-16-161637", "10-16-162111", "10-16-165404", "10-28-174720", "10-28-175646",
+                    "11-06-170347", "10-28-180513", "10-28-182538", "10-28-183215", "10-28-183646",
+                    "10-28-185129", "10-28-191518", "10-28-191544", "10-28-191557", "11-04-164347",
+                    "11-04-164812", "11-06-163442", "11-06-163708", "11-06-163805", "11-06-164033",
+                    "11-06-170347" "11-06-181526", "11-11-165448", "11-11-170109", 
+                    "11-06-170426", "11-06-170921", "11-06-171808", "11-06-171956",
+                    "11-06-180212", "11-06-181423", "11-11-163407", "11-11-164209", "11-11-164347", "11-11-165140",
+                    "11-18-161216", "11-18-161218", "11-18-161258", "11-18-161658", "11-18-161746","11-18-162038",
+                    "11-18-162046","11-18-162051","11-18-162158","11-18-162332","11-18-162453", "11-18-162525","11-18-163002",
+                    "11-18-163004","11-18-163132","11-18-163841" ]
     samples = []
     for jpg in Path(data_dir).glob("*.jpg"):
         base = jpg.stem
-        # if base in bad_samples:
-        #     print("bad sample skipped:", base)
-        #     continue
+        if base in bad_samples:
+            print("bad sample skipped:", base)
+            continue
         npy = Path(data_dir) / f"{base}.npy"
         txt = Path(data_dir) / f"{base}.txt"
         if npy.exists() and txt.exists():
@@ -331,7 +331,7 @@ def split_pointing_data(data_dir, output_dir, train_ratio=0.7,
         d.mkdir(parents=True, exist_ok=True)
         for s in split:
             for k in ['jpg', 'txt', 'npy']:
-                shutil.move(s[k], d / s[k].name)
+                shutil.copy2(s[k], d / s[k].name)
         print(f"✓ {name}: {len(split)} samples")
 
     return {'train': len(train), 'val': len(val), 'test': len(test)}
@@ -339,4 +339,4 @@ def split_pointing_data(data_dir, output_dir, train_ratio=0.7,
 # Example usage
 if __name__ == "__main__":
     # Create dataset
-    split_pointing_data("data2", "split_data2", train_ratio=0.85,val_ratio=0.15)
+    split_pointing_data("data", "split_data", train_ratio=0.85,val_ratio=0.15)
