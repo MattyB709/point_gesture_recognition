@@ -36,26 +36,24 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scaler, use_amp
 
         angle_count += (is_pointing == 1.0).sum().item()
         # Forward pass
-        with torch.autocast(device_type = 'cuda', dtype = torch.float16, enabled = use_amp):
-            outputs = model(imgs)
-            
-            # split outputs, first index is confidence, rest is vector
-            pred_confidence = outputs[:, :1]
-            # pred_confidence = torch.zeros((imgs.shape[0], 1)).to(device).requires_grad_(True)
-            pred_vector = outputs[:, 1:]
+        outputs = model(imgs)
+        
+        # split outputs, first index is confidence, rest is vector
+        pred_confidence = outputs[:, :1]
+        # pred_confidence = torch.zeros((imgs.shape[0], 1)).to(device).requires_grad_(True)
+        pred_vector = outputs[:, 1:]
             
 
             # Compute loss
-            loss, conf_loss, vec_loss = criterion(pred_confidence, pred_vector, is_pointing, vector)
+        loss, conf_loss, vec_loss = criterion(pred_confidence, pred_vector, is_pointing, vector)
         mask = (is_pointing == 1.0).squeeze()
         if mask.sum() > 0:
             angular_error_deg += angular_error(pred_vector[mask], vector[mask]) * mask.sum().item()
             angle_count += mask.sum().item()
         # Backward pass
         optimizer.zero_grad()
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
+        loss.backward()
+        optimizer.step()
 
         # Accumulate losses
         total_loss += loss.item()
@@ -103,14 +101,13 @@ def validate(model, dataloader, criterion, device, use_amp = False):
 
             # Forward pass
 
-            with torch.autocast(device_type = 'cuda', dtype = torch.float16, enabled = use_amp):
-                outputs = model(imgs)
-                pred_confidence = outputs[:, :1]
-                pred_vector = outputs[:, 1:]
-                # pred_confidence = torch.zeros((imgs.shape[0], 1)).to(device).requires_grad_(True)
-                # pred_vector= outputs
-                # Compute loss
-                loss, conf_loss, vec_loss = criterion(pred_confidence, pred_vector, is_pointing, vector)
+            outputs = model(imgs)
+            pred_confidence = outputs[:, :1]
+            pred_vector = outputs[:, 1:]
+            # pred_confidence = torch.zeros((imgs.shape[0], 1)).to(device).requires_grad_(True)
+            # pred_vector= outputs
+            # Compute loss
+            loss, conf_loss, vec_loss = criterion(pred_confidence, pred_vector, is_pointing, vector)
 
             mask = (is_pointing == 1.0).squeeze()
             if mask.sum() > 0:
