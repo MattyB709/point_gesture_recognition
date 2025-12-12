@@ -11,7 +11,7 @@ import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
-OUTPUT_DIR = "data"   # <-- set this
+OUTPUT_DIR = "grid_data"   
 DETECTION_RADIUS = 15 # find the min depth in a 10x10 pixel square
 Y_MAX = 1080
 X_MAX = 1920
@@ -33,7 +33,7 @@ def _stamp():
     # month-day-time => 05-11-142530
     return datetime.now().strftime("%m-%d-%H%M%S")
 
-def _save_sample(bgr_img, depth_in_color, label, start_dir_cam=None):
+def _save_sample(bgr_img, depth_in_color, label, start_dir_cam=None, pointed_to_id=None):
     """
     bgr_img: uint8 BGR image (1920x1080x3)
     depth_in_color: uint16 (1080x1920; you pass transformed_depth)
@@ -57,7 +57,7 @@ def _save_sample(bgr_img, depth_in_color, label, start_dir_cam=None):
         if label == 1 and start_dir_cam is not None:
             start_tag, end_tag = start_dir_cam
             # EXACTLY 7 lines total: 1 + 6 numbers (each on its own line)
-            nums = start_tag + list(end_tag.astype(float))
+            nums = start_tag + list(end_tag.astype(float)) + [float(pointed_to_id)]
             for v in nums:
                 f.write(f"{v:.6f}\n")
     print(f"[saved] {img_path}, {depth_path}, {txt_path}")
@@ -123,7 +123,8 @@ if __name__ == "__main__":
                             bgr_to_save,
                             depth_in_color,
                             label=0,
-                            start_dir_cam=None
+                            start_dir_cam=None,
+                            pointed_to_id=None
                         )
                     elif key == ord('q'):
                         break
@@ -223,7 +224,8 @@ if __name__ == "__main__":
                             bgr_to_save,
                             depth_in_color,
                             label=1,
-                            start_dir_cam=(([xm,ym,zm],v))  # computed below
+                            start_dir_cam=(([xm,ym,zm],v)),  # computed below
+                            pointed_to_id = pointed_to_id
                         )
                     except NameError:
                         print("Cannot save positive: no valid wrist/vector computed this frame.")
@@ -334,7 +336,8 @@ if __name__ == "__main__":
                         bgr_to_save,
                         depth_in_color,
                         label=1,
-                        start_dir_cam=(([xm,ym,zm],v))  # computed below
+                        start_dir_cam=(([xm,ym,zm],v)),  # computed below
+                        pointed_to_id = pointed_to_id
                     )
                 except NameError:
                     print("Cannot save positive: no valid wrist/vector computed this frame.")

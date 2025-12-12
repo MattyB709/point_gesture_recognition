@@ -7,3 +7,4 @@ transformation_map.json
 wandb/
 *.pth
 check_data/
+grid_data/
