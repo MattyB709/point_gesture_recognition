@@ -8,7 +8,7 @@ import torchvision
 from test_model_live import preprocess_exact
 from train.metrics import angular_error
 
-def get_2d_points(calib, wrist_coords, vec):
+def get_2d_points_from_vec(calib, wrist_coords, vec):
 
     xmm, ymm, zmm = wrist_coords * 1000
     point_on_ray = np.array((xmm, ymm, zmm)) + (300 * vec) 
@@ -70,11 +70,11 @@ if __name__ == "__main__":
                 nums = [float(x.strip()) for x in lines[1:]]
                 start_xyz_m = np.array(nums[:3])
                 dir_vec = np.array(nums[3:])
-                cam_point, cam_wrist = get_2d_points(calib, start_xyz_m, dir_vec)
+                cam_point, cam_wrist = get_2d_points_from_vec(calib, start_xyz_m, dir_vec)
                 if cam_point is not None and cam_wrist is not None:
                     cv2.circle(color_img, cam_wrist, 10, (0, 255, 0), -1)  # Green for wrist
                     cv2.line(color_img, cam_wrist, cam_point, (0, 0, 255), 5)  # Red for pointing direction
-                cam_point_pred, cam_wrist_pred = get_2d_points(calib, start_xyz_m, pred_vec)
+                cam_point_pred, cam_wrist_pred = get_2d_points_from_vec(calib, start_xyz_m, pred_vec)
                 if cam_point_pred is not None and cam_wrist_pred is not None:
                     cv2.line(color_img, cam_wrist_pred, cam_point_pred, (255, 255, 0), 5)  # Cyan for predicted direction   
                     error = angular_error(torch.from_numpy(dir_vec).unsqueeze(0), torch.from_numpy(pred_vec).unsqueeze(0))

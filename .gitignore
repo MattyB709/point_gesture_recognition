@@ -9,3 +9,5 @@ wandb/
 check_data/
 check_data/
 *.zip
+split_data2/
+grid_data/

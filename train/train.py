@@ -377,12 +377,12 @@ if __name__ == "__main__":
     # train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-4, device='cuda', use_wandb=True, use_amp=False, notes="old data", aux_name="old_data")
     data_dir = "./split_data"
 
-    train_dataset = PointingDataset(data_dir + "/train", augment = True, normalize=True)
+    train_dataset = PointingDataset(data_dir + "/train", augment = False, normalize=True)
     val_dataset = PointingDataset(data_dir + "/val", augment = False, normalize=True)
-    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False, num_workers=4)
+    train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True, num_workers=4)
+    val_loader = DataLoader(val_dataset, batch_size=4, shuffle=False, num_workers=4)
 
-    model_name = "ResNet18"
+    model_name = "ResNet50"
     train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-4, device='cuda', use_wandb=True, use_amp=False, notes="back to horizontal flip", aux_name="h_flip")
     # train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True, num_workers=4)
     # val_loader = DataLoader(val_dataset, batch_size=8, shuffle=False, num_workers=4)

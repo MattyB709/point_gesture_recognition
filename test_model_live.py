@@ -108,7 +108,7 @@ def create_resnet_frozen(model_name="ResNet50", freeze_until_layer=2, dropout=0.
 # -------------------------
 # Model (load + CUDA + eval)
 # -------------------------
-CONF_THRESHOLD = 0.25
+CONF_THRESHOLD = 0
 device = "cuda" if torch.cuda.is_available() else "cpu"
 MEAN = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1).to(device)
 STD = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1).to(device)
@@ -138,8 +138,8 @@ if __name__ == "__main__":
     # model = models.resnet50()
     # model.fc = torch.nn.Linear(model.fc.in_features, 4)
     # state_dict = torch.load("trained_models/ResNet50_augTrue_ampFalse_clean_data_2025-12-10 21:59.pth", map_location="cpu")["model_state_dict"]
-    model = create_model("SqueezeNet")
-    state_dict = torch.load("trained_models/SqueezeNet_augTrue_ampFalse_clean_data_2025-12-11 01:19.pth", map_location="cpu")["model_state_dict"]
+    model = create_model("ResNet50")
+    state_dict = torch.load("trained_models/ResNet50_augFalse_ampFalse_h_flip_2025-12-12 14:04.pth", map_location="cpu")["model_state_dict"]
     model.load_state_dict(state_dict, strict=True)
     model.to(device).eval()
     torch.backends.cudnn.benchmark = True
@@ -173,6 +173,10 @@ if __name__ == "__main__":
         cap = k4a.get_capture()
         color_bgra = cap.color                # (1080,1920,4) BGRA uint8
         depth_in_color = cap.transformed_depth  # (1080,1920) uint16
+
+        # cv2.imwrite("temp.jpg", cv2.cvtColor(color_bgra, cv2.COLOR_BGRA2BGR))
+        # bgr_img = cv2.imread("temp.jpg")
+        # color_bgra = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2BGRA)
 
         if color_bgra is None or depth_in_color is None:
             continue
