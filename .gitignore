@@ -7,6 +7,7 @@ transformation_map.json
 wandb/
 *.pth
 check_data/
+grid_data/
 check_data/
 *.zip
 split_data2/
