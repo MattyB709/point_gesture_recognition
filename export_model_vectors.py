@@ -38,19 +38,19 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--img-dir", required=True, help="Folder containing .jpg files")
     ap.add_argument("--out-dir", required=True, help="Folder to write .txt outputs")
-    ap.add_argument("--ckpt", required=True, help="Path to .pth checkpoint")
     ap.add_argument("--glob", default="*.jpg", help="Pattern inside --img-dir (default: *.jpg)")
     args = ap.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = build_model(args.ckpt, device)
+    ckpt = "trained_models/ResNet50_augTrue_ampTrue_2025-11-30 20:49.pth"
+    model = build_model(ckpt, device)
 
     paths = sorted(glob.glob(os.path.join(args.img_dir, args.glob)))
     if not paths:
         raise SystemExit(f"No images found in {args.img_dir} matching {args.glob}")
 
-    use_amp = (device == "cuda")
+    use_amp = False
     for img_path in paths:
         base = os.path.splitext(os.path.basename(img_path))[0]
         out_path = os.path.join(args.out_dir, base + ".txt")
