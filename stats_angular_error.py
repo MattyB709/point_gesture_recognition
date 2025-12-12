@@ -49,7 +49,7 @@ def pixel_to_3d(color_x, color_y, depth_mm):
 
 def run_model(model, img):
     with torch.no_grad():
-        input_tensor = preprocess_exact(cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)).to('cpu')
+        input_tensor = preprocess_exact(cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)).to('cuda')
         output = model(input_tensor)
         output = output.cpu().squeeze()
         conf = torch.sigmoid(output[0]).item()

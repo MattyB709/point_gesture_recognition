@@ -69,7 +69,7 @@ state_dict = torch.load(
     map_location="cpu"
 )["model_state_dict"]
 model.load_state_dict(state_dict, strict=True)
-model.to(device).eval()
+model.to(device).eval().to("cuda")
 
 with open("transformation_map.json", "r") as f:
     loaded = json.load(f)
@@ -144,7 +144,11 @@ for file in sorted(os.listdir(DIRECTORY)):
     # ========================================================================
     
     result_mp = pose.process(rgb)
+    if result_mp.pose_landmarks is None:
+        print("FAILED: No pose landmarks detected")
+        continue
     landmarks = result_mp.pose_landmarks.landmark
+
     left_finger = landmarks[mp.solutions.pose.PoseLandmark.LEFT_INDEX]
     
     finger_x = int(np.clip(left_finger.x * rgb.shape[1], 0, rgb.shape[1] - 1))
