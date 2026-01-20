@@ -26,7 +26,7 @@ def get_2d_points_from_vec(calib, wrist_coords, vec):
 if __name__ == "__main__":
 
 
-    os.makedirs("check_data", exist_ok=True)
+    os.makedirs("grid_data", exist_ok=True)
     cfg = Config(
         color_resolution=ColorResolution.RES_1080P,       # 1920x1080
         depth_mode=DepthMode.NFOV_UNBINNED,               # 640x576 depth
@@ -39,7 +39,7 @@ if __name__ == "__main__":
     k4a.stop()
     model = torchvision.models.resnet50()
     model.fc = torch.nn.Linear(model.fc.in_features, 4)
-    state_dict = torch.load("trained_models/ResNet50_augTrue_ampFalse_clean_data_2025-12-10 21:59.pth", map_location="cpu")["model_state_dict"]
+    state_dict = torch.load("trained_models/ResNet50_augFalse_ampFalse_h_flip_2025-12-12 14:04.pth", map_location="cpu")["model_state_dict"]
     model.load_state_dict(state_dict, strict=True)
     total_angular_error = 0.0
     num_angular_samples = 0

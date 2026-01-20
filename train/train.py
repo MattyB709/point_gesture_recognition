@@ -36,25 +36,27 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scaler, use_amp
 
         angle_count += (is_pointing == 1.0).sum().item()
         # Forward pass
-        outputs = model(imgs)
-        
-        # split outputs, first index is confidence, rest is vector
-        pred_confidence = outputs[:, :1]
-        # pred_confidence = torch.zeros((imgs.shape[0], 1)).to(device).requires_grad_(True)
-        pred_vector = outputs[:, 1:]
+        with torch.autocast(device, enabled=use_amp):
+            outputs = model(imgs)
+            
+            # split outputs, first index is confidence, rest is vector
+            pred_confidence = outputs[:, :1]
+            # pred_confidence = torch.zeros((imgs.shape[0], 1)).to(device).requires_grad_(True)
+            pred_vector = outputs[:, 1:]
             
 
             # Compute loss
-        loss, conf_loss, vec_loss = criterion(pred_confidence, pred_vector, is_pointing, vector)
+            loss, conf_loss, vec_loss = criterion(pred_confidence, pred_vector, is_pointing, vector)
         mask = (is_pointing == 1.0).squeeze()
         if mask.sum() > 0:
             angular_error_deg += angular_error(pred_vector[mask], vector[mask]) * mask.sum().item()
             angle_count += mask.sum().item()
         # Backward pass
         optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
+        scaler.scale(loss).backward()
+        # loss.backward()
+        scaler.step(optimizer)
+        scaler.update()
         # Accumulate losses
         total_loss += loss.item()
         total_conf_loss += conf_loss.item()
@@ -101,13 +103,14 @@ def validate(model, dataloader, criterion, device, use_amp = False):
 
             # Forward pass
 
-            outputs = model(imgs)
-            pred_confidence = outputs[:, :1]
-            pred_vector = outputs[:, 1:]
-            # pred_confidence = torch.zeros((imgs.shape[0], 1)).to(device).requires_grad_(True)
-            # pred_vector= outputs
-            # Compute loss
-            loss, conf_loss, vec_loss = criterion(pred_confidence, pred_vector, is_pointing, vector)
+            with torch.autocast(device, enabled=use_amp):
+                outputs = model(imgs)
+                pred_confidence = outputs[:, :1]
+                pred_vector = outputs[:, 1:]
+                # pred_confidence = torch.zeros((imgs.shape[0], 1)).to(device).requires_grad_(True)
+                # pred_vector= outputs
+                # Compute loss
+                loss, conf_loss, vec_loss = criterion(pred_confidence, pred_vector, is_pointing, vector)
 
             mask = (is_pointing == 1.0).squeeze()
             if mask.sum() > 0:
@@ -297,17 +300,19 @@ def create_model(model_name: str):
     elif model_name == "ViT_B_16":
         weights = models.ViT_B_16_Weights.DEFAULT
         model = models.vit_b_16(weights=weights)
-
-        print("Freezing first 8 of 12 transformer blocks...")
-        for i, block in enumerate(model.encoder.layers):
-            if i < 8:
-                for param in block.parameters():
-                    param.requires_grad = False
-
-        model.heads.head = torch.nn.Sequential(
-            torch.nn.Dropout(0.5),  # ← Add this!
-            torch.nn.Linear(model.heads.head.in_features, 4)
-        )
+        model.heads.head = torch.nn.Linear(model.heads.head.in_features, 4)
+    elif model_name == "ViT_B_32":
+        weights = models.ViT_B_32_Weights.DEFAULT
+        model = models.vit_b_32(weights=weights)
+        model.heads.head = torch.nn.Linear(model.heads.head.in_features, 4)
+    elif model_name == "ViT_l_16":
+        weights = models.ViT_L_16_Weights.DEFAULT
+        model = models.vit_l_16(weights=weights)
+        model.heads.head = torch.nn.Linear(model.heads.head.in_features, 4)
+    elif model_name == "ViT_l_32":
+        weights = models.ViT_L_32_Weights.DEFAULT
+        model = models.vit_l_32(weights=weights)
+        model.heads.head = torch.nn.Linear(model.heads.head.in_features, 4)
     elif model_name == "ResNet34":
         model = models.resnet34(weights=models.ResNet34_Weights.DEFAULT)
         model.fc = torch.nn.Linear(model.fc.in_features, 4)  # 1 for confidence + 3 for vector
@@ -377,21 +382,39 @@ if __name__ == "__main__":
     # train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-4, device='cuda', use_wandb=True, use_amp=False, notes="old data", aux_name="old_data")
     data_dir = "./split_data"
 
-    train_dataset = PointingDataset(data_dir + "/train", augment = False, normalize=True)
-    val_dataset = PointingDataset(data_dir + "/val", augment = False, normalize=True)
-    train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_dataset, batch_size=4, shuffle=False, num_workers=4)
 
-    model_name = "ResNet50"
-    train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-4, device='cuda', use_wandb=True, use_amp=False, notes="back to horizontal flip", aux_name="h_flip")
+    # model_name = "ResNet101"
+    # train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-4, device='cuda', use_wandb=True, use_amp=True, notes="back to horizontal flip", aux_name="h_flip")
     # train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True, num_workers=4)
     # val_loader = DataLoader(val_dataset, batch_size=8, shuffle=False, num_workers=4)
     # model_name = "ResNet50"
     # train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-5, device='cuda', use_wandb=True, use_amp=False, 
     #             notes="training with cleaned data", aux_name="clean_data")
     # model_name = "ResNet18"
-    # train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-5, device='cuda', use_wandb=True, use_amp=False, 
+    # train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-5, device='cuda', use_wandb=True, use_amp=True, 
     #             notes="training with cleaned data", aux_name="clean_data")
+    model_name = "ViT_l_32"
+    forms = models.ViT_L_32_Weights.DEFAULT.transforms()
+    train_dataset = PointingDataset(data_dir + "/train", transform=forms, augment = False, normalize=True)
+    val_dataset = PointingDataset(data_dir + "/val", transform=forms, augment = False, normalize=True)
+    train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True, num_workers=4)
+    val_loader = DataLoader(val_dataset, batch_size=4, shuffle=False, num_workers=4)
+    # model_name = "ViT_B_16"
+    # train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-5, device='cuda', use_wandb=True, use_amp=True, 
+    #             notes="training with cleaned data", aux_name="clean_data")
+    # model_name = "ViT_l_16"
+    # train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-5, device='cuda', use_wandb=True, use_amp=True, 
+    #             notes="training with cleaned data", aux_name="clean_data")
+    model_name = "ViT_B_32"
+    train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-5, device='cuda', use_wandb=True, use_amp=True, 
+                notes="training with cleaned data", aux_name="clean_data")
+    train_dataset = PointingDataset(data_dir + "/train", augment = False, normalize=True)
+    val_dataset = PointingDataset(data_dir + "/val", augment = False, normalize=True)
+    train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True, num_workers=4)
+    val_loader = DataLoader(val_dataset, batch_size=8, shuffle=False, num_workers=4)
+    model_name = "ResNet34"
+    train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-5, device='cuda', use_wandb=True, use_amp=True, 
+                notes="training with cleaned data", aux_name="clean_data")
     # model_name = "SqueezeNet"
     # train_model(model_name, train_loader, val_loader, num_epochs=200, lr=1e-5, device='cuda', use_wandb=True, use_amp=False, 
     #             notes="training with cleaned data", aux_name="clean_data")

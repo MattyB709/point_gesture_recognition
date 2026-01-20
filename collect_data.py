@@ -97,266 +97,31 @@ if __name__ == "__main__":
     transformation_map = {int(k): np.array(v) for k, v in loaded.items()}
     mp_pose = mp.solutions.pose
     pose = mp_pose.Pose()
-  
+        
     while True:
         cap = k4a.get_capture()          # blocking
         color = cap.color                # numpy uint8, shape (1080,1920,4) BGRA
         depth = cap.depth                # numpy uint16, shape (576,640), units = millimeters
 
+        calib = k4a.calibration                    # pyk4a Calibration object (intrinsics+extrinsics)
         depth_in_color = cap.transformed_depth
 
         rgb = cv2.cvtColor(color, cv2.COLOR_BGRA2RGB)
+        result = pose.process(rgb)
         detections = get_detections(rgb)
         
-            while True:
-                cap = k4a.get_capture()          # blocking
-                color = cap.color                # numpy uint8, shape (1080,1920,4) BGRA
-                depth = cap.depth                # numpy uint16, shape (576,640), units = millimeters
-
-                calib = k4a.calibration                    # pyk4a Calibration object (intrinsics+extrinsics)
-                depth_in_color = cap.transformed_depth
-
-                rgb = cv2.cvtColor(color, cv2.COLOR_BGRA2RGB)
-                result = pose.process(rgb)
-                detections = get_detections(rgb)
-                
-                if detections is None:
-                    cv2.imshow("Image", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
-                    key = cv2.waitKey(1) & 0xFF
-                    if key == ord('n'):
-                        # Save negative sample (image + depth + label 0)
-                        bgr_to_save = cv2.cvtColor(color, cv2.COLOR_BGRA2BGR)
-                        _save_sample(
-                            bgr_to_save,
-                            depth_in_color,
-                            label=0,
-                            start_dir_cam=None,
-                            pointed_to_id=None
-                        )
-                    elif key == ord('q'):
-                        break
-                    continue
-
-                draw_detections(rgb, detections)
-
-
-                if result.pose_landmarks:
-                    landmarks = result.pose_landmarks.landmark
-                    left_wrist = landmarks[mp.solutions.pose.PoseLandmark.LEFT_WRIST]
-                    # Coordinates are normalized (0–1 range)
-                    x,y = left_wrist.x, left_wrist.y
-                    x *= rgb.shape[1]
-                    y *= rgb.shape[0]
-                    x,y = int(x), int(y)
-                    rgb = cv2.circle(rgb, (x, y), radius=3, color=(0, 255, 0), thickness=-1)
-
-                    # if pointing to id is set
-                    if pointed_to_id != -1:
-                        # use first apriltag detection to get camera->world
-                        id = detections[0].tag_id
-                        if id not in transformation_map:
-                            print(f"tag {id} not found in transformation map")
-                            # pointed_to_id = -1
-                            continue
-                        if pointed_to_id not in transformation_map:
-                            print(f"pointed to tag {pointed_to_id} not in transformation map")
-                            # pointed_to_id = -1
-                            continue
-                        H = detections[0].homography.astype(np.float64)
-
-                        tag_to_world = transformation_map[id]
-                        tag_to_camera = decompose_homography(H)
-                        camera_to_tag = np.linalg.inv(tag_to_camera)
-                        camera_to_world = tag_to_world @ camera_to_tag
-                        world_to_camera = np.linalg.inv(camera_to_world)
-
-                        # get tag->world for pointed to tag from transformation_map and invert it to get world->tag
-                        pointed_to_tag_to_world = transformation_map[pointed_to_id]
-                        # pointed_to_id = -1
-                        pointed_to_tag_to_camera = world_to_camera @ pointed_to_tag_to_world
-
-                        # extract tag coordinates from T of tag->camera
-                        t_pointed_to_tag_to_camera = pointed_to_tag_to_camera[:3, 3].copy()
-                        t_pointed_to_tag_to_camera *= half_side_m
-
-                        if x < X_MAX and x > 0 and y < Y_MAX and y > 0:
-                            depth_point = depth_in_color[y,x]
-                            if depth_point == 0:
-                                continue
-                            xmm, ymm, zmm = calib.convert_2d_to_3d((x, y), depth_point, 
-                                                                CalibrationType.COLOR)
-                            xm = xmm / 1000
-                            ym = ymm / 1000
-                            zm = zmm / 1000
-
-                            # calculate vector between tag coordinates and wrist coordinates
-                            v = np.array([t_pointed_to_tag_to_camera[0] - xm, t_pointed_to_tag_to_camera[1] - ym, t_pointed_to_tag_to_camera[2] - zm])
-                            norm = np.linalg.norm(v)
-                            if norm > 1e-8:
-                                v /= norm
-                            else: 
-                                print("issue with vector norm") 
-                                continue
-
-                            # calculate 3D point along vector ray from wrist coordinates
-                            point_on_ray = np.array([xmm, ymm, zmm]) + (300* v)
-                            try:
-                                uv = calib.convert_3d_to_2d(point_on_ray, CalibrationType.COLOR, CalibrationType.COLOR)
-                                camera_coords_calculated = tuple(map(int, uv))
-
-                                uv = calib.convert_3d_to_2d((xmm, ymm, zmm), CalibrationType.COLOR, CalibrationType.COLOR)
-                                camera_coords_wrist = tuple(map(int, uv))
-                                cv2.line(rgb, camera_coords_wrist, camera_coords_calculated, (0, 255, 0), 2)
-                            except Exception:
-                                pass
-
-                            
-
-                            # draw vector on 2D image connecting wrist and calculated point
-                cv2.imshow("Image", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord('q'):
-                    break
-                elif key == ord('c'):
-                    try:
-                        pointed_to_id = int(input("Enter tag id to point at: "))
-                    except Exception:
-                        print("Invalid tag id")
-                    continue
-                elif key == ord('y'):
-                    # Save positive sample (requires valid wrist + vector this frame)
-                    bgr_to_save = cv2.cvtColor(color, cv2.COLOR_BGRA2BGR)
-                    try:
-                        _save_sample(
-                            bgr_to_save,
-                            depth_in_color,
-                            label=1,
-                            start_dir_cam=(([xm,ym,zm],v)),  # computed below
-                            pointed_to_id = pointed_to_id
-                        )
-                    except NameError:
-                        print("Cannot save positive: no valid wrist/vector computed this frame.")
-                    continue
-                elif key == ord('n'):
-                    # Save negative sample (image + depth + label 0)
-                    bgr_to_save = cv2.cvtColor(color, cv2.COLOR_BGRA2BGR)
-                    _save_sample(
-                        bgr_to_save,
-                        depth_in_color,
-                        label=0,
-                        start_dir_cam=None
-                    )
-                elif key == ord('q'):
-                    break
-                continue
-
-            draw_detections(rgb, detections)
-
-
-            if result.pose_landmarks:
-                landmarks = result.pose_landmarks.landmark
-                left_wrist = landmarks[mp.solutions.pose.PoseLandmark.LEFT_WRIST]
-                # Coordinates are normalized (0–1 range)
-                x,y = left_wrist.x, left_wrist.y
-                x *= rgb.shape[1]
-                y *= rgb.shape[0]
-                x,y = int(x), int(y)
-                rgb = cv2.circle(rgb, (x, y), radius=3, color=(0, 255, 0), thickness=-1)
-
-                # if pointing to id is set
-                if pointed_to_id != -1:
-                    # use first apriltag detection to get camera->world
-                    id = detections[0].tag_id
-                    if id not in transformation_map:
-                        print(f"tag {id} not found in transformation map")
-                        # pointed_to_id = -1
-                        continue
-                    if pointed_to_id not in transformation_map:
-                        print(f"pointed to tag {pointed_to_id} not in transformation map")
-                        # pointed_to_id = -1
-                        continue
-                    H = detections[0].homography.astype(np.float64)
-
-                    tag_to_world = transformation_map[id]
-                    tag_to_camera = decompose_homography(H)
-                    camera_to_tag = np.linalg.inv(tag_to_camera)
-                    camera_to_world = tag_to_world @ camera_to_tag
-                    world_to_camera = np.linalg.inv(camera_to_world)
-
-                    # get tag->world for pointed to tag from transformation_map and invert it to get world->tag
-                    pointed_to_tag_to_world = transformation_map[pointed_to_id]
-                    # pointed_to_id = -1
-                    pointed_to_tag_to_camera = world_to_camera @ pointed_to_tag_to_world
-
-                    # extract tag coordinates from T of tag->camera
-                    t_pointed_to_tag_to_camera = pointed_to_tag_to_camera[:3, 3].copy()
-                    t_pointed_to_tag_to_camera *= half_side_m
-
-                    if x < X_MAX and x > 0 and y < Y_MAX and y > 0:
-                        depth_point = depth_in_color[y,x]
-                        if depth_point == 0:
-                            continue
-                        xmm, ymm, zmm = calib.convert_2d_to_3d((x, y), depth_point, 
-                                                            CalibrationType.COLOR)
-                        xm = xmm / 1000
-                        ym = ymm / 1000
-                        zm = zmm / 1000
-
-                        # calculate vector between tag coordinates and wrist coordinates
-                        v = np.array([t_pointed_to_tag_to_camera[0] - xm, t_pointed_to_tag_to_camera[1] - ym, t_pointed_to_tag_to_camera[2] - zm])
-                        norm = np.linalg.norm(v)
-                        if norm > 1e-8:
-                            v /= norm
-                        else: 
-                            print("issue with vector norm") 
-                            continue
-
-                        # calculate 3D point along vector ray from wrist coordinates
-                        point_on_ray = np.array([xmm, ymm, zmm]) + (300* v)
-                        try:
-                            uv = calib.convert_3d_to_2d(point_on_ray, CalibrationType.COLOR, CalibrationType.COLOR)
-                            camera_coords_calculated = tuple(map(int, uv))
-
-                            uv = calib.convert_3d_to_2d((xmm, ymm, zmm), CalibrationType.COLOR, CalibrationType.COLOR)
-                            camera_coords_wrist = tuple(map(int, uv))
-                            cv2.line(rgb, camera_coords_wrist, camera_coords_calculated, (0, 255, 0), 2)
-                        except Exception:
-                            pass
-
-
-                        # draw vector on 2D image connecting wrist and calculated point
+        if detections is None:
             cv2.imshow("Image", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
             key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
-                break
-            elif key == ord('c'):
-                try:
-                    pointed_to_id = int(input("Enter tag id to point at: "))
-                except Exception:
-                    print("Invalid tag id")
-                continue
-            elif key == ord('y'):
-                # Save positive sample (requires valid wrist + vector this frame)
-                bgr_to_save = cv2.cvtColor(color, cv2.COLOR_BGRA2BGR)
-                try:
-                    _save_sample(
-                        bgr_to_save,
-                        depth_in_color,
-                        label=1,
-                        start_dir_cam=(([xm,ym,zm],v)),  # computed below
-                        pointed_to_id = pointed_to_id
-                    )
-                except NameError:
-                    print("Cannot save positive: no valid wrist/vector computed this frame.")
-                continue
-            elif key == ord('n'):
+            if key == ord('n'):
                 # Save negative sample (image + depth + label 0)
                 bgr_to_save = cv2.cvtColor(color, cv2.COLOR_BGRA2BGR)
                 _save_sample(
                     bgr_to_save,
                     depth_in_color,
                     label=0,
-                    start_dir_cam=None
+                    start_dir_cam=None,
+                    pointed_to_id=None
                 )
             elif key == ord('q'):
                 break
@@ -364,7 +129,7 @@ if __name__ == "__main__":
 
         draw_detections(rgb, detections)
 
-        result = pose.process(rgb)
+
         if result.pose_landmarks:
             landmarks = result.pose_landmarks.landmark
             left_wrist = landmarks[mp.solutions.pose.PoseLandmark.LEFT_WRIST]
@@ -375,64 +140,67 @@ if __name__ == "__main__":
             x,y = int(x), int(y)
             rgb = cv2.circle(rgb, (x, y), radius=3, color=(0, 255, 0), thickness=-1)
 
-            id = detections[0].tag_id
-            if id not in transformation_map:
-                print(f"tag {id} not found in transformation map")
-                # pointed_to_id = -1
-                continue
-            if pointed_to_id not in transformation_map:
-                print(f"pointed to tag {pointed_to_id} not in transformation map")
-                # pointed_to_id = -1
-                continue
-            H = detections[0].homography.astype(np.float64)
-
-            tag_to_world = transformation_map[id]
-            tag_to_camera = decompose_homography(H)
-            camera_to_tag = np.linalg.inv(tag_to_camera)
-            camera_to_world = tag_to_world @ camera_to_tag
-            world_to_camera = np.linalg.inv(camera_to_world)
-
-            # get tag->world for pointed to tag from transformation_map and invert it to get world->tag
-            pointed_to_tag_to_world = transformation_map[pointed_to_id]
-            # pointed_to_id = -1
-            pointed_to_tag_to_camera = world_to_camera @ pointed_to_tag_to_world
-
-            # extract tag coordinates from T of tag->camera
-            t_pointed_to_tag_to_camera = pointed_to_tag_to_camera[:3, 3].copy()
-            t_pointed_to_tag_to_camera *= half_side_m
-
-            if x < X_MAX and x > 0 and y < Y_MAX and y > 0:
-                depth_point = depth_in_color[y,x]
-                if depth_point == 0:
+            # if pointing to id is set
+            if pointed_to_id != -1:
+                # use first apriltag detection to get camera->world
+                id = detections[0].tag_id
+                if id not in transformation_map:
+                    print(f"tag {id} not found in transformation map")
+                    # pointed_to_id = -1
                     continue
-                xmm, ymm, zmm = calib.convert_2d_to_3d((x, y), depth_point, 
-                                                    CalibrationType.COLOR)
-                xm = xmm / 1000
-                ym = ymm / 1000
-                zm = zmm / 1000
-
-                # calculate vector between tag coordinates and wrist coordinates
-                v = np.array([t_pointed_to_tag_to_camera[0] - xm, t_pointed_to_tag_to_camera[1] - ym, t_pointed_to_tag_to_camera[2] - zm])
-                norm = np.linalg.norm(v)
-                if norm > 1e-8:
-                    v /= norm
-                else: 
-                    print("issue with vector norm") 
+                if pointed_to_id not in transformation_map:
+                    print(f"pointed to tag {pointed_to_id} not in transformation map")
+                    # pointed_to_id = -1
                     continue
+                H = detections[0].homography.astype(np.float64)
 
-                # calculate 3D point along vector ray from wrist coordinates
-                point_on_ray = np.array([xmm, ymm, zmm]) + (300* v)
-                try:
-                    uv = calib.convert_3d_to_2d(point_on_ray, CalibrationType.COLOR, CalibrationType.COLOR)
-                    camera_coords_calculated = tuple(map(int, uv))
+                tag_to_world = transformation_map[id]
+                tag_to_camera = decompose_homography(H)
+                camera_to_tag = np.linalg.inv(tag_to_camera)
+                camera_to_world = tag_to_world @ camera_to_tag
+                world_to_camera = np.linalg.inv(camera_to_world)
 
-                    uv = calib.convert_3d_to_2d((xmm, ymm, zmm), CalibrationType.COLOR, CalibrationType.COLOR)
-                    camera_coords_wrist = tuple(map(int, uv))
-                    cv2.line(rgb, camera_coords_wrist, camera_coords_calculated, (0, 255, 0), 2)
-                except Exception:
-                    pass
+                # get tag->world for pointed to tag from transformation_map and invert it to get world->tag
+                pointed_to_tag_to_world = transformation_map[pointed_to_id]
+                # pointed_to_id = -1
+                pointed_to_tag_to_camera = world_to_camera @ pointed_to_tag_to_world
 
-                        
+                # extract tag coordinates from T of tag->camera
+                t_pointed_to_tag_to_camera = pointed_to_tag_to_camera[:3, 3].copy()
+                t_pointed_to_tag_to_camera *= half_side_m
+
+                if x < X_MAX and x > 0 and y < Y_MAX and y > 0:
+                    depth_point = depth_in_color[y,x]
+                    if depth_point == 0:
+                        continue
+                    xmm, ymm, zmm = calib.convert_2d_to_3d((x, y), depth_point, 
+                                                        CalibrationType.COLOR)
+                    xm = xmm / 1000
+                    ym = ymm / 1000
+                    zm = zmm / 1000
+
+                    # calculate vector between tag coordinates and wrist coordinates
+                    v = np.array([t_pointed_to_tag_to_camera[0] - xm, t_pointed_to_tag_to_camera[1] - ym, t_pointed_to_tag_to_camera[2] - zm])
+                    norm = np.linalg.norm(v)
+                    if norm > 1e-8:
+                        v /= norm
+                    else: 
+                        print("issue with vector norm") 
+                        continue
+
+                    # calculate 3D point along vector ray from wrist coordinates
+                    point_on_ray = np.array([xmm, ymm, zmm]) + (300* v)
+                    try:
+                        uv = calib.convert_3d_to_2d(point_on_ray, CalibrationType.COLOR, CalibrationType.COLOR)
+                        camera_coords_calculated = tuple(map(int, uv))
+
+                        uv = calib.convert_3d_to_2d((xmm, ymm, zmm), CalibrationType.COLOR, CalibrationType.COLOR)
+                        camera_coords_wrist = tuple(map(int, uv))
+                        cv2.line(rgb, camera_coords_wrist, camera_coords_calculated, (0, 255, 0), 2)
+                    except Exception:
+                        pass
+
+                    
 
                     # draw vector on 2D image connecting wrist and calculated point
         cv2.imshow("Image", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
@@ -453,7 +221,8 @@ if __name__ == "__main__":
                     bgr_to_save,
                     depth_in_color,
                     label=1,
-                    start_dir_cam=(([xm,ym,zm],v))  # computed below
+                    start_dir_cam=(([xm,ym,zm],v)),  # computed below
+                    pointed_to_id = pointed_to_id
                 )
             except NameError:
                 print("Cannot save positive: no valid wrist/vector computed this frame.")
@@ -469,5 +238,7 @@ if __name__ == "__main__":
             )
         elif key == ord('q'):
             break
+
+        
     k4a.stop()
     cv2.destroyAllWindows()

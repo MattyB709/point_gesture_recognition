@@ -1,5 +1,5 @@
-# Process directory of images to compare predicted vs geometric tag classification
-# For McNemar's test
+# Process directory of images to compare distance to correct tag
+# Paired t-test for continuous distance metric
 
 import os
 import numpy as np
@@ -12,38 +12,35 @@ import mediapipe as mp
 import torch
 from torchvision import models
 import torch.nn.functional as F
-from statsmodels.stats.contingency_tables import mcnemar
+from scipy import stats
 from stats_angular_error import run_model, pixel_to_3d
 
 Y_MAX = 1080
 X_MAX = 1920
 HALF_SIDE_M = 0.10
 
-def find_closest_tag_on_plane(wrist_world, direction_world, transformation_map):
-    """Find closest tag by intersecting ray with z=0 plane"""
+def find_distance_to_tag(wrist_world, direction_world, tag_id, transformation_map):
+    """Find distance from ray intersection to specific tag on z=0 plane"""
     x_w, y_w, z_w = wrist_world
     vx, vy, vz = direction_world
     
     if abs(vz) < 1e-6:
-        return None, None
+        return None
     
+    # Intersect with z=0 plane
     t = -z_w / vz
     x_intersect = x_w + vx * t
     y_intersect = y_w + vy * t
     
-    min_dist = float('inf')
-    closest_id = None
+    # Get tag position
+    tag_matrix = transformation_map[tag_id]
+    tag_x = tag_matrix[0, 3]
+    tag_y = tag_matrix[1, 3]
     
-    for tag_id, matrix in transformation_map.items():
-        tag_x = matrix[0, 3]
-        tag_y = matrix[1, 3]
-        dist = np.sqrt((x_intersect - tag_x)**2 + (y_intersect - tag_y)**2)
-        
-        if dist < min_dist:
-            min_dist = dist
-            closest_id = tag_id
+    # Calculate 2D distance on plane
+    dist = np.sqrt((x_intersect - tag_x)**2 + (y_intersect - tag_y)**2)
     
-    return closest_id, min_dist
+    return dist
 
 # ============================================================================
 # SETUP
@@ -62,10 +59,10 @@ k4a.start()
 calib = k4a.calibration
 k4a.stop()
 
-model = models.resnet50()
+model = models.resnet101()
 model.fc = torch.nn.Linear(model.fc.in_features, 4)
 state_dict = torch.load(
-    "trained_models/ResNet50_augFalse_ampFalse_h_flip_2025-12-12 14:04.pth", 
+    "trained_models/ResNet101_augFalse_ampTrue_h_flip_2025-12-12 19:03.pth", 
     map_location="cpu"
 )["model_state_dict"]
 model.load_state_dict(state_dict, strict=True)
@@ -81,9 +78,7 @@ for matrix in transformation_map.values():
     matrix[2, 3] = 0.0
 
 mp_pose = mp.solutions.pose
-pose = mp_pose.Pose(
-    static_image_mode=True,
-)
+pose = mp_pose.Pose(static_image_mode=True)
 
 # ============================================================================
 # PROCESS DIRECTORY
@@ -91,8 +86,8 @@ pose = mp_pose.Pose(
 
 DIRECTORY = "grid_data"
 
-geometric_correct = []
-predicted_correct = []
+geometric_distances = []
+predicted_distances = []
 
 for file in sorted(os.listdir(DIRECTORY)):
     if not file.endswith(".txt"):
@@ -173,7 +168,7 @@ for file in sorted(os.listdir(DIRECTORY)):
     conf, pred_direction_cam = run_model(model, bgr)
     
     # ========================================================================
-    # CONVERT TO WORLD FRAME AND FIND CLOSEST TAGS
+    # CONVERT TO WORLD FRAME AND FIND DISTANCES TO CORRECT TAG
     # ========================================================================
     
     # Convert wrist to world frame (in tag units)
@@ -186,66 +181,109 @@ for file in sorted(os.listdir(DIRECTORY)):
     geo_direction_world = rotation_matrix @ geo_direction_cam
     pred_direction_world = rotation_matrix @ pred_direction_cam
     
-    # Find closest tags
-    geo_tag_id, geo_dist = find_closest_tag_on_plane(
-        wrist_world, geo_direction_world, transformation_map
+    # Find distance to CORRECT tag (not closest tag)
+    geo_dist = find_distance_to_tag(
+        wrist_world, geo_direction_world, correct_tag, transformation_map
     )
     
-    pred_tag_id, pred_dist = find_closest_tag_on_plane(
-        wrist_world, pred_direction_world, transformation_map
+    pred_dist = find_distance_to_tag(
+        wrist_world, pred_direction_world, correct_tag, transformation_map
     )
     
-    # Check correctness
-    geo_correct = (geo_tag_id == correct_tag)
-    pred_correct = (pred_tag_id == correct_tag)
+    if geo_dist is None or pred_dist is None:
+        print("FAILED: Could not compute distances")
+        continue
     
-    print(f"  True: {correct_tag}, Geo: {geo_tag_id} {'✓' if geo_correct else '✗'}, Model: {pred_tag_id} {'✓' if pred_correct else '✗'}")
+    # Convert to centimeters for reporting
+    geo_dist_cm = geo_dist * HALF_SIDE_M * 100
+    pred_dist_cm = pred_dist * HALF_SIDE_M * 100
     
-    geometric_correct.append(1 if geo_correct else 0)
-    predicted_correct.append(1 if pred_correct else 0)
+    print(f"  Tag {correct_tag}: Geo={geo_dist_cm:.2f} cm, Model={pred_dist_cm:.2f} cm")
+    
+    geometric_distances.append(geo_dist_cm)
+    predicted_distances.append(pred_dist_cm)
 
 # ============================================================================
-# McNEMAR'S TEST
+# STATISTICAL TESTS
 # ============================================================================
 
-geo = np.array(geometric_correct)
-pred = np.array(predicted_correct)
+geo = np.array(geometric_distances)
+pred = np.array(predicted_distances)
 
-# Build contingency table
-a = np.sum((geo == 1) & (pred == 1))  # Both correct
-b = np.sum((geo == 1) & (pred == 0))  # Geo correct, model wrong
-c = np.sum((geo == 0) & (pred == 1))  # Geo wrong, model correct
-d = np.sum((geo == 0) & (pred == 0))  # Both wrong
+n = len(geo)
+geo_mean = np.mean(geo)
+geo_std = np.std(geo, ddof=1)
+pred_mean = np.mean(pred)
+pred_std = np.std(pred, ddof=1)
 
-table = np.array([[a, b], [c, d]])
+# Paired t-test
+t_stat, p_value_t = stats.ttest_rel(pred, geo)
 
-geo_acc = np.mean(geo) * 100
-pred_acc = np.mean(pred) * 100
+# Wilcoxon signed-rank test (non-parametric alternative)
+wilcoxon_stat, p_value_w = stats.wilcoxon(pred, geo)
+
+# Mean difference and 95% CI
+diff = pred - geo
+mean_diff = np.mean(diff)
+se_diff = stats.sem(diff)
+ci_95 = stats.t.interval(0.95, len(diff)-1, loc=mean_diff, scale=se_diff)
+
+# Effect size (Cohen's d)
+cohens_d = mean_diff / np.std(diff, ddof=1)
 
 print("\n" + "="*70)
-print("TAG CLASSIFICATION RESULTS")
+print("DISTANCE TO CORRECT TAG RESULTS")
 print("="*70)
-print(f"Samples: {len(geo)}")
-print(f"Geometric: {geo_acc:.1f}% ({geo.sum()}/{len(geo)})")
-print(f"Model: {pred_acc:.1f}% ({pred.sum()}/{len(pred)})")
-print(f"\nContingency Table:")
-print(f"                     Model")
-print(f"           Correct  Wrong")
-print(f"Geo Correct   {a}      {b}")
-print(f"Geo Wrong     {c}      {d}")
+print(f"Samples: {n}")
+print(f"\nGeometric Baseline:")
+print(f"  Mean ± SD: {geo_mean:.2f} ± {geo_std:.2f} cm")
+print(f"  Range: [{geo.min():.2f}, {geo.max():.2f}] cm")
 
-if b + c < 25:
-    result = mcnemar(table, exact=True)
+print(f"\nDeep Learning Model:")
+print(f"  Mean ± SD: {pred_mean:.2f} ± {pred_std:.2f} cm")
+print(f"  Range: [{pred.min():.2f}, {pred.max():.2f}] cm")
+
+print(f"\nDifference (Model - Geometric):")
+print(f"  Mean difference: {mean_diff:.2f} cm")
+print(f"  95% CI: [{ci_95[0]:.2f}, {ci_95[1]:.2f}] cm")
+print(f"  Cohen's d: {cohens_d:.3f}")
+
+print(f"\nPaired t-test:")
+print(f"  t-statistic: {t_stat:.3f}")
+print(f"  df: {n-1}")
+print(f"  p-value: {p_value_t:.6f}")
+
+print(f"\nWilcoxon signed-rank test (robustness check):")
+print(f"  W-statistic: {wilcoxon_stat:.1f}")
+print(f"  p-value: {p_value_w:.6f}")
+
+print("\n" + "="*70)
+if p_value_t < 0.001:
+    if mean_diff < 0:
+        print("*** Model has HIGHLY significantly lower distance (p < 0.001)")
+    else:
+        print("*** Geometric has HIGHLY significantly lower distance (p < 0.001)")
+elif p_value_t < 0.01:
+    if mean_diff < 0:
+        print("**  Model has significantly lower distance (p < 0.01)")
+    else:
+        print("**  Geometric has significantly lower distance (p < 0.01)")
+elif p_value_t < 0.05:
+    if mean_diff < 0:
+        print("*   Model has significantly lower distance (p < 0.05)")
+    else:
+        print("*   Geometric has significantly lower distance (p < 0.05)")
 else:
-    result = mcnemar(table, exact=False, correction=True)
+    print(f"    No significant difference (p = {p_value_t:.4f})")
 
-print(f"\nMcNemar's Test:")
-print(f"  Statistic: {result.statistic:.3f}")
-print(f"  P-value: {result.pvalue:.4f}")
-
-if result.pvalue < 0.05:
-    winner = "Model" if c > b else "Geometric"
-    print(f"  → {winner} is significantly better")
+# Effect size interpretation
+print(f"\nEffect size interpretation:")
+if abs(cohens_d) < 0.2:
+    print(f"  |d| = {abs(cohens_d):.3f}: Negligible effect")
+elif abs(cohens_d) < 0.5:
+    print(f"  |d| = {abs(cohens_d):.3f}: Small effect")
+elif abs(cohens_d) < 0.8:
+    print(f"  |d| = {abs(cohens_d):.3f}: Medium effect")
 else:
-    print(f"  → No significant difference")
+    print(f"  |d| = {abs(cohens_d):.3f}: Large effect")
 print("="*70)

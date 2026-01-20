@@ -103,27 +103,31 @@ if __name__ == "__main__":
     base_options = python.BaseOptions(model_asset_path=PATH)
     options = vision.PoseLandmarkerOptions(base_options=base_options, output_segmentation_masks=False)
     mp_pose = mp.solutions.pose
-    pose = mp_pose.Pose()
+    pose = mp_pose.Pose(
+        static_image_mode=True
+    )
 
     model = torchvision.models.resnet50()
     model.fc = torch.nn.Linear(model.fc.in_features, 4)
-    state_dict = torch.load("trained_models/ResNet50_augTrue_ampFalse_clean_data_2025-12-10 21:59.pth", map_location="cpu")["model_state_dict"]
+    state_dict = torch.load("trained_models/ResNet50_augFalse_ampFalse_h_flip_2025-12-12 14:04.pth", map_location="cpu")["model_state_dict"]
     model.load_state_dict(state_dict, strict=True)
-
+    model.to("cuda").eval()
+    
     total_angular_error = 0.0
     geo_angular_error = 0.0
     num_angular_samples = 0
     angular_errors_pred = []
     angular_errors_geo = []
-    for file in os.listdir("split_data/val"):
+    DIR = "split_data/val"
+    for file in os.listdir(DIR):
         
         if not file.endswith(".txt"):
             continue
         print(f"Processing {file}...")
-        txt_path = os.path.join("split_data/val", file)
+        txt_path = os.path.join(DIR, file)
         base_name = file[:-4]
-        img_path = os.path.join("split_data/val", base_name + ".jpg")
-        depth_path = os.path.join("split_data/val", base_name + ".npy")
+        img_path = os.path.join(DIR, base_name + ".jpg")
+        depth_path = os.path.join(DIR, base_name + ".npy")
         depth_in_color = np.load(depth_path)
 
         color_img = cv2.imread(img_path)
@@ -164,7 +168,7 @@ if __name__ == "__main__":
                 geo_vec = geo_vec / np.linalg.norm(geo_vec)
                 geo_point, geo_wrist = get_2d_points(calib, start_xyz_m, geo_vec)
 
-                dir_vec = np.array(nums[3:])
+                dir_vec = np.array(nums[3:6])
                 cam_point, cam_wrist = get_2d_points(calib, start_xyz_m, dir_vec)
 
                 if cam_point is not None and cam_wrist is not None:
@@ -177,20 +181,22 @@ if __name__ == "__main__":
                     error = angular_error(torch.from_numpy(dir_vec).unsqueeze(0), torch.from_numpy(pred_vec).unsqueeze(0))
                     angular_errors_pred.append(error)
                     total_angular_error += error
-                    cv2.putText(color_img, f"Error: {error:.1f} deg", (50, 50),
-                                cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 0, 0), 3)
+                    cv2.putText(color_img, f"Error: {error:.1f} deg", (650, 100),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 255, 0), 3)
 
                 if geo_point is not None and geo_wrist is not None:
                     error = angular_error(torch.from_numpy(dir_vec).unsqueeze(0), torch.from_numpy(geo_vec).unsqueeze(0))   
                     geo_angular_error += error
                     angular_errors_geo.append(error)
                     cv2.line(color_img, geo_wrist, geo_point, (255, 0, 0), 5)  # Red for pointing direction
+                    cv2.putText(color_img, f"Error: {error:.1f} deg", (650, 50),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 0, 0), 3)
 
 
-        # cv2.imwrite(f"check_data/{base_name}.jpg", color_img)
-        # key = cv2.waitKey(0)
-        # if key == 27:  # ESC to exit
-        #     break
+        cv2.imwrite(f"check_data/{base_name}.jpg", color_img)
+        key = cv2.waitKey(0)
+        if key == 27:  # ESC to exit
+            break
     if num_angular_samples > 0:
         avg_angular_error = total_angular_error / num_angular_samples
         avg_geo_angular_error = geo_angular_error / num_angular_samples

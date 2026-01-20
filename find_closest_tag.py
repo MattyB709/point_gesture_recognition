@@ -29,7 +29,7 @@ X_MAX = 1920
 CONF_THRESHOLD = 0.0
 HALF_SIDE_M = 0.10  # same as your other file
 device = "cuda" if torch.cuda.is_available() else "cpu"
-state_dict = torch.load("trained_models/ResNet50_augTrue_ampTrue_2025-11-30 20:49.pth", map_location="cpu")["model_state_dict"]
+state_dict = torch.load("trained_models/ResNet50_augFalse_ampFalse_h_flip_2025-12-12 14:04.pth", map_location="cpu")["model_state_dict"]
 model = models.resnet50()
 model.fc = torch.nn.Linear(model.fc.in_features, 4)  # 1 for confidence + 3 for vector
 model.load_state_dict(state_dict, strict=True)
@@ -118,7 +118,7 @@ while True:
 
                 finger_mm = finger_mm / np.linalg.norm(finger_mm)
                 with torch.no_grad():
-                    inp = preprocess_exact(rgb).to(device)
+                    inp = preprocess_exact(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGRA)).to(device)
                     out = model(inp)                           # (1,4)
                     conf = torch.sigmoid(out[:, :1]).item()    # scalar in [0,1]
                     vec = F.normalize(out[:, 1:], p=2, dim=1)[0].detach().cpu().numpy()  # (3,)

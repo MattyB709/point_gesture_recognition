@@ -108,7 +108,7 @@ def create_resnet_frozen(model_name="ResNet50", freeze_until_layer=2, dropout=0.
 # -------------------------
 # Model (load + CUDA + eval)
 # -------------------------
-CONF_THRESHOLD = 0
+CONF_THRESHOLD = 0.1
 device = "cuda" if torch.cuda.is_available() else "cpu"
 MEAN = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1).to(device)
 STD = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1).to(device)
